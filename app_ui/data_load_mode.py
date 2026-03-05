@@ -355,7 +355,7 @@ def _build_v0_fig(results):
             v0_fitted = slope * conc_range + intercept
             fig.add_trace(go.Scatter(x=conc_range, y=v0_fitted, mode='lines', name=f'Linear Fit: {mm_fit.get("equation", "")}', line=dict(width=2.5, color='blue', dash='dash')))
         fig.update_layout(
-            title='Initial Velocity (v₀) vs Enzyme Concentration [E] (Substrate 고정)',
+            title='Initial Velocity (v₀) vs Enzyme Concentration [E] (Constant Substrate)',
             xaxis_title='[E] (μg/mL)', yaxis_title='Initial Velocity v₀ (Fluorescence Units / Time)',
             template='plotly_white', height=600, hovermode='x unified',
             plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
@@ -723,41 +723,41 @@ def data_load_mode(st):
             detail_df = pd.DataFrame(detail_data)
             st.dataframe(detail_df, use_container_width=True, hide_index=True, height=400)
         else:
-            st.info("데이터가 없습니다.")
+            st.info("No data available.")
     
     if experiment_type == "Enzyme Concentration Variation (Fixed substrate)":
         st.sidebar.warning("""
-        ⚠️ **Substrate 고정 + Enzyme 농도 변화 실험**
+        ⚠️ **Constant Substrate + Enzyme Concentration Variation**
         
-        - v는 [E]에 대해 **선형(linear)** 관계입니다
-        - **Km을 구할 수 없습니다** (기질 농도 gradient 필요)
-        - **Vmax를 구할 수 없습니다** (표준 MM 정의에선 [E] 고정 필요)
-        - 구할 수 있는 파라미터:
+        - v is **linearly** related to [E]
+        - **Km cannot be determined** (substrate concentration gradient required)
+        - **Vmax cannot be determined** (standard MM requires fixed [E])
+        - Obtainable parameters:
           - **slope = kcat × [S] / (Km + [S])**
-          - Substrate 농도가 매우 낮으면: **slope ≈ kcat/Km × [S]**
+          - At very low [S]: **slope ≈ kcat/Km × [S]**
         """)
     
     # Enzyme 농도 입력 (kcat 계산용, Substrate 농도 변화 실험에서만 필요)
     if experiment_type == "Substrate Concentration Variation (Standard MM)":
-        st.sidebar.subheader("🧪 Enzyme 농도 설정 (kcat 계산용)")
+        st.sidebar.subheader("🧪 Enzyme concentration setting (for kcat calculation)")
         enzyme_conc_input = st.sidebar.number_input(
-            "Enzyme 농도 [E] (μg/mL)",
+            "Enzyme concentration [E] (μg/mL)",
             min_value=0.0,
             value=51.43,
             step=0.1,
-            help="kcat = Vmax / [E]_T 계산을 위해 필요합니다. 실험에서 사용한 효소 농도를 입력하세요."
+            help="Required for kcat = Vmax / [E]_T. Enter the enzyme concentration used in the experiment."
         )
     else:
         enzyme_conc_input = None
     
     # Michaelis-Menten 모델 실행 버튼
     if st.button("🚀 Run Michaelis-Menten Model", type="primary"):
-            with st.spinner("Michaelis-Menten 모델 피팅 진행 중..."):
+            with st.spinner("Running Michaelis-Menten model fitting..."):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
                 # 1. 각 농도별 시간 경과 곡선 피팅
-                status_text.text("1️⃣ 각 농도별 시간 경과 곡선 피팅 중...")
+                status_text.text("1️⃣ Fitting time-course curves per concentration...")
                 progress_bar.progress(0.2)
                 
                 mm_results = {}
@@ -917,14 +917,14 @@ def data_load_mode(st):
                             Km = None
                             kcat = None
                             mm_r_squared = 0
-                            cal_equation = "피팅 실패"
+                            cal_equation = "Fitting failed"
                             mm_fit_success = False
                     else:
                         Vmax = None
                         Km = None
                         kcat = None
                         mm_r_squared = 0
-                        cal_equation = "데이터 부족 (최소 2개 농도 필요)"
+                        cal_equation = "Insufficient data (at least 2 concentrations required)"
                         mm_fit_success = False
                 
                 else:  # Enzyme Concentration Variation (Fixed substrate)
@@ -960,7 +960,7 @@ def data_load_mode(st):
                             
                             # slope = kcat * [S] / (Km + [S])
                             # Substrate 농도가 알려져 있으면 kcat/Km을 추정할 수 있음 (희석 조건)
-                            cal_equation = f"v₀ = {slope:.4f} * [E] + {intercept:.4f} (선형)"
+                            cal_equation = f"v₀ = {slope:.4f} * [E] + {intercept:.4f} (Linear)"
                             mm_fit_success = True
                         except Exception as e:
                             st.warning(f"⚠️ Linear fitting failed: {e}")
@@ -968,20 +968,20 @@ def data_load_mode(st):
                             Km = None
                             kcat = None
                             mm_r_squared = 0
-                            cal_equation = "피팅 실패"
+                            cal_equation = "Fitting failed"
                             mm_fit_success = False
                     else:
                         Vmax = None
                         Km = None
                         kcat = None
                         mm_r_squared = 0
-                        cal_equation = "데이터 부족 (최소 2개 농도 필요)"
+                        cal_equation = "Insufficient data (at least 2 concentrations required)"
                         mm_fit_success = False
                 
                 progress_bar.progress(0.85)
                 
                 # 5. 결과 저장
-                status_text.text("5️⃣ 결과 저장 중...")
+                status_text.text("5️⃣ Saving results...")
                 
                 # 초기 속도 Results 저장 (MM 파라미터 포함)
                 # 농도 단위 결정: 실험 타입에 따라
@@ -1045,7 +1045,7 @@ def data_load_mode(st):
                 else:
                     kcat = None
                     if experiment_type == "Substrate Concentration Variation (Standard MM)" and mm_fit_success and Vmax is not None:
-                        st.sidebar.warning("⚠️ kcat 계산을 위해 Enzyme 농도를 입력해주세요.")
+                        st.sidebar.warning("⚠️ Please enter enzyme concentration for kcat calculation.")
                 
                 # MM 피팅 결과를 별도로 저장
                 mm_fit_results = {
@@ -1061,7 +1061,7 @@ def data_load_mode(st):
                 }
                 
                 # Enzyme 농도 변화인 경우 slope 저장
-                if experiment_type == "Enzyme 농도 변화 (Substrate 고정)" and mm_fit_success:
+                if experiment_type == "Enzyme Concentration Variation (Fixed substrate)" and mm_fit_success:
                     concentrations = [params['concentration'] for params in sorted(mm_results.values(), 
                                                                                   key=lambda x: x['concentration'])]
                     v0_values = [params['v0'] for params in sorted(mm_results.values(), 
@@ -1120,7 +1120,7 @@ def data_load_mode(st):
                     }
                 
                 # 정규화 기반 v0으로 MM fit 다시 수행
-                status_text.text("7️⃣ 정규화 기반 v₀로 MM 피팅 재수행 중...")
+                status_text.text("7️⃣ Re-running MM fitting with normalized v₀...")
                 
                 # 정규화 기반 v0 값들로 농도와 v0 데이터 수집
                 norm_concentrations = []
@@ -1176,7 +1176,7 @@ def data_load_mode(st):
                             else:
                                 kcat = None
                                 if Vmax is not None:
-                                    st.sidebar.warning("⚠️ kcat 계산을 위해 Enzyme 농도를 입력해주세요.")
+                                    st.sidebar.warning("⚠️ Please enter enzyme concentration for kcat calculation.")
                             
                             mm_fit_success = True
                             
@@ -1213,7 +1213,7 @@ def data_load_mode(st):
                             ss_tot = np.sum((norm_v0_list - np.mean(norm_v0_list)) ** 2)
                             mm_r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
                             
-                            cal_equation = f"v₀ = {slope:.4f} * [E] + {intercept:.4f} (선형)"
+                            cal_equation = f"v₀ = {slope:.4f} * [E] + {intercept:.4f} (Linear)"
                             mm_fit_success = True
                             
                             # mm_fit_results 업데이트
@@ -1230,13 +1230,13 @@ def data_load_mode(st):
                                 'intercept': intercept
                             }
                         except Exception as e:
-                            st.warning(f"⚠️ 정규화 기반 선형 피팅 실패: {e}")
+                            st.warning(f"⚠️ Normalization-based linear fitting failed: {e}")
                             mm_fit_success = False
                     else:
                         mm_fit_success = False
                 
                 # 정규화 결과를 사용하여 보간 곡선 재생성 (Exponential 식 사용)
-                status_text.text("8️⃣ 정규화 기반 보간 곡선 재생성 중...")
+                status_text.text("8️⃣ Regenerating interpolation curves from normalization...")
                 
                 if 'normalization_results' in locals() and normalization_results:
                     all_interp_data_new = []
@@ -1356,7 +1356,7 @@ def data_load_mode(st):
                     - **kcat**: Cannot be determined alone (only kcat/Km possible)
                     """)
             elif 'mm_fit_results' in results:
-                st.warning("⚠️ MM 피팅 실패 또는 데이터 부족")
+                st.warning("⚠️ MM fitting failed or insufficient data")
             
             # 탭 구성 (st.tabs 대신 st.radio를 사용하여 상태 제어)
             exp_type = results.get('mm_fit_results', {}).get('experiment_type', 'Substrate Concentration Variation (Standard MM)')
@@ -1459,7 +1459,7 @@ def data_load_mode(st):
                         if raw_conc_data.get('SD') is not None:
                             sd_values = raw_conc_data['SD']
                             # 실험 타입에 따라 조건부 표시
-                            if exp_type == "Enzyme 농도 변화 (Substrate 고정)":
+                            if exp_type == "Enzyme Concentration Variation (Fixed substrate)":
                                 # Enzyme 조건: SD가 0이 아닌 값이 하나라도 있으면 표시
                                 if isinstance(sd_values, (list, np.ndarray)):
                                     has_nonzero_sd = np.any(np.array(sd_values) > 0)
@@ -1975,7 +1975,7 @@ def data_load_mode(st):
                             """)
                         
                         # 방정식 및 R² 테이블
-                        st.subheader("정규화 파라미터")
+                        st.subheader("Normalization Parameters")
                         # 실험 타입에 따라 농도 단위 결정
                         exp_type = results.get('mm_fit_results', {}).get('experiment_type', 'Substrate Concentration Variation (Standard MM)')
                         conc_value = norm_data['concentration']
@@ -2065,7 +2065,7 @@ def data_load_mode(st):
                         st.dataframe(summary_df, use_container_width=True, hide_index=True)
                         
                 else:
-                    st.info("정규화 결과가 없습니다. 먼저 'Michaelis-Menten Model 실행' 버튼을 클릭해주세요.")
+                    st.info("No normalization results. Please run the 'Run Michaelis-Menten Model' button first.")
             
             # Tab 2: v₀ vs 농도 그래프 (실험 조건에 따라 다름)
             v0_tab_idx = 2 if exp_type == "Substrate Concentration Variation (Standard MM)" else 2
@@ -2090,7 +2090,7 @@ def data_load_mode(st):
                         st.subheader("v₀ vs [S] Michaelis-Menten Fit")
                         
                         # 실험 데이터 테이블 (expander)
-                        with st.expander("📋 실험 데이터 미리보기", expanded=False):
+                        with st.expander("📋 Preview Experimental Data", expanded=False):
                             # 농도와 v0 데이터를 테이블로 표시
                             exp_data = {
                                 '[S] (μM)': v0_data['concentrations'],
@@ -2143,11 +2143,11 @@ def data_load_mode(st):
                             hovermode='x unified'
                         )
                     else:
-                        st.subheader("v₀ vs [E] Linear Fit (Substrate 고정)")
-                        st.warning("⚠️ 표준 Michaelis-Menten 모델이 아닙니다. v는 [E]에 대해 선형 관계입니다.")
+                        st.subheader("v₀ vs [E] Linear Fit (Constant Substrate)")
+                        st.warning("⚠️ This is not the standard Michaelis-Menten model. v is linearly related to [E].")
                         
                         # 실험 데이터 테이블 (expander)
-                        with st.expander("📋 실험 데이터 미리보기", expanded=False):
+                        with st.expander("📋 Preview Experimental Data", expanded=False):
                             # 농도와 v0 데이터를 테이블로 표시
                             exp_data = {
                                 '[E] (μg/mL)': v0_data['concentrations'],
@@ -2180,7 +2180,7 @@ def data_load_mode(st):
                             stats_text = f"Slope = {slope:.4f}<br>"
                             stats_text += f"Intercept = {intercept:.4f}<br>"
                             stats_text += f"R² = {mm_fit['R_squared']:.4f}<br>"
-                            stats_text += "<br><b>⚠️ Km을 구할 수 없음</b>"
+                            stats_text += "<br><b>⚠️ Cannot calculate Km</b>"
                             
                             fig_v0.add_annotation(
                                 xref="paper", yref="paper",
@@ -2195,7 +2195,7 @@ def data_load_mode(st):
                             )
                         
                         fig_v0.update_layout(
-                            title='Initial Velocity (v₀) vs Enzyme Concentration [E] (Substrate 고정)',
+                            title='Initial Velocity (v₀) vs Enzyme Concentration [E] (Constant Substrate)',
                             xaxis_title='[E] (μg/mL)',
                             yaxis_title='Initial Velocity v₀ (Fluorescence Units / Time)',
                             template='plotly_white',
@@ -2205,12 +2205,12 @@ def data_load_mode(st):
                     
                     st.plotly_chart(fig_v0, use_container_width=True)
                 else:
-                    st.warning("v₀ vs 농도 데이터가 없습니다.")
+                    st.warning("No v₀ vs concentration data available.")
             
             # 마지막 탭: 데이터 테이블
             data_tab_idx = 3 if exp_type == "Substrate Concentration Variation (Standard MM)" else 3
             if selected_tab == tab_titles[data_tab_idx]:
-                st.subheader("상세 파라미터")
+                st.subheader("Detailed Parameters")
                 
                 # 상세 파라미터 테이블 (정규화 기반 v0 사용)
                 # 정규화 결과에서 v0 가져오기
@@ -2264,13 +2264,13 @@ def data_load_mode(st):
                 
                 # MM Fit 결과 표시
                 st.markdown("---")
-                st.subheader("MM Fit 결과")
+                st.subheader("MM Fit Results")
                 if 'mm_fit_results' in results and results['mm_fit_results'].get('fit_success'):
                     mm_fit = results['mm_fit_results']
                     if exp_type == "Substrate Concentration Variation (Standard MM)":
                         mm_fit_data = {
-                            '파라미터': ['Vmax', 'Km (μM)', 'kcat', 'R²'],
-                            '값': [
+                            'Parameter': ['Vmax', 'Km (μM)', 'kcat', 'R²'],
+                            'Value': [
                                 f"{mm_fit['Vmax']:.2f}" if mm_fit['Vmax'] is not None else "N/A",
                                 f"{mm_fit['Km']:.4f}" if mm_fit['Km'] is not None else "N/A",
                                 f"{mm_fit['kcat']:.2f}" if mm_fit['kcat'] is not None else "N/A",
@@ -2279,8 +2279,8 @@ def data_load_mode(st):
                         }
                     else:
                         mm_fit_data = {
-                            '파라미터': ['Slope', 'Intercept', 'R²'],
-                            '값': [
+                            'Parameter': ['Slope', 'Intercept', 'R²'],
+                            'Value': [
                                 f"{mm_fit.get('slope', 0):.4f}" if mm_fit.get('slope') is not None else "N/A",
                                 f"{mm_fit.get('intercept', 0):.4f}" if mm_fit.get('intercept') is not None else "N/A",
                                 f"{mm_fit['R_squared']:.4f}"
@@ -2289,7 +2289,7 @@ def data_load_mode(st):
                     mm_fit_df = pd.DataFrame(mm_fit_data)
                     st.dataframe(mm_fit_df, use_container_width=True, hide_index=True)
                 else:
-                    st.warning("MM Fit 결과가 없습니다.")
+                    st.warning("No MM Fit results available.")
                 
                 # 파일 다운로드 버튼
                 st.markdown("---")
@@ -2336,14 +2336,14 @@ def data_load_mode(st):
                                         conc_display = f"{conc_value} μg/mL"
                                     
                                     norm_summary_data.append({
-                                        '농도': conc_display,
+                                        'Concentration': conc_display,
                                         'F₀': n_data['F0'],
                                         'F_max': n_data['Fmax'],
                                         'k_obs': n_data.get('k_obs', None),
                                         'τ': n_data.get('tau', None),
                                         'v₀ (RFU/min)': v0_conc,
                                         'R²': n_data['R_squared'],
-                                        '방정식': n_data['equation']
+                                        'Equation': n_data['equation']
                                     })
                                 
                                 if norm_summary_data:
@@ -2355,8 +2355,8 @@ def data_load_mode(st):
                                 mm_fit = results['mm_fit_results']
                                 if exp_type == "Substrate Concentration Variation (Standard MM)":
                                     mm_fit_data = {
-                                        '파라미터': ['Vmax', 'Km (μM)', 'kcat', 'R²', '방정식'],
-                                        '값': [
+                                        'Parameter': ['Vmax', 'Km (μM)', 'kcat', 'R²', 'Equation'],
+                                        'Value': [
                                             mm_fit['Vmax'] if mm_fit['Vmax'] is not None else "N/A",
                                             mm_fit['Km'] if mm_fit['Km'] is not None else "N/A",
                                             mm_fit['kcat'] if mm_fit['kcat'] is not None else "N/A",
@@ -2366,8 +2366,8 @@ def data_load_mode(st):
                                     }
                                 else:
                                     mm_fit_data = {
-                                        '파라미터': ['Slope', 'Intercept', 'R²', '방정식'],
-                                        '값': [
+                                        'Parameter': ['Slope', 'Intercept', 'R²', 'Equation'],
+                                        'Value': [
                                             mm_fit.get('slope', None),
                                             mm_fit.get('intercept', None),
                                             mm_fit['R_squared'],
@@ -2393,18 +2393,18 @@ def data_load_mode(st):
                             with open('Michaelis-Menten_calibration_results.xlsx', 'wb') as f:
                                 f.write(xlsx_data)
                         except Exception as save_err:
-                            st.sidebar.warning(f"⚠️ XLSX 파일 자동 저장 실패: {save_err}")
+                            st.sidebar.warning(f"⚠️ XLSX auto-save failed: {save_err}")
                         
                         st.download_button(
-                            label="📥 전체 결과 다운로드 (XLSX)",
+                            label="📥 Download All Results (XLSX)",
                             data=xlsx_data,
                             file_name=xlsx_download_name,
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             use_container_width=True,
-                            help="MM Results, Normalization Results, MM Fit Results, Michaelis-Menten Curves 시트를 포함한 전체 엑셀 파일입니다."
+                            help="Full Excel file including MM Results, Normalization Results, MM Fit Results, and Michaelis-Menten Curves sheets."
                         )
                     except Exception as e:
-                        st.warning(f"XLSX 다운로드 준비 중 오류: {e}")
+                        st.warning(f"Error preparing XLSX download: {e}")
                 
                 # 모든 분석 이미지 ZIP 다운로드 (투명 PNG)
                 with col2:
@@ -2422,7 +2422,7 @@ def data_load_mode(st):
                                     err_msg = str(img_err)
                                     if "kaleido" in err_msg.lower() or "chrome" in err_msg.lower():
                                         err_msg += " → Chrome 설치 불필요. 터미널에서 'pip install -U kaleido' 실행 후 Streamlit 앱을 재시작해주세요. (kaleido 0.2+는 Chrome 없이 동작합니다.)"
-                                    st.warning(f"이미지 생성 실패 ({name}): {err_msg}")
+                                    st.warning(f"Image generation failed ({name}): {err_msg}")
                         zip_buffer.seek(0)
                         zip_bytes = zip_buffer.getvalue()
                         if zip_bytes:
@@ -2437,5 +2437,5 @@ def data_load_mode(st):
                         else:
                             st.caption("이미지 생성에 실패했습니다. kaleido 설치 후 Streamlit 앱을 재시작해주세요. (pip install -U kaleido)")
                     except Exception as zip_err:
-                        st.warning(f"이미지 ZIP 준비 중 오류: {zip_err}")
+                        st.warning(f"Error preparing image ZIP: {zip_err}")
 

@@ -698,10 +698,10 @@ def general_analysis_mode(st):
                      stats_text += f"Intercept = {intercept:.4f}<br>"
                      if mm_fit.get('R_squared'):
                         stats_text += f"R² = {mm_fit['R_squared']:.4f}<br>"
-                     stats_text += "<br><b>⚠️ Km을 구할 수 없음</b>"
+                     stats_text += "<br><b>⚠️ Cannot calculate Km</b>"
                      
                      xaxis_title = '[E] (μg/mL)'
-                     title = 'Initial Velocity (v₀) vs Enzyme Concentration [E] (Substrate 고정)'
+                     title = 'Initial Velocity (v₀) vs Enzyme Concentration [E] (Constant Substrate)'
 
                 fig_v0.add_trace(go.Scatter(
                     x=conc_range,
