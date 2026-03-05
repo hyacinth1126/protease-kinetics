@@ -1547,7 +1547,7 @@ def data_load_mode(st):
                         
                         # Selectbox 생성
                         selected_option = st.selectbox(
-                            "농도 선택",
+                            "Concentration Selection",
                             formatted_options,
                             index=0,
                             key="normalization_conc_select_box"
@@ -2011,7 +2011,7 @@ def data_load_mode(st):
                         st.dataframe(param_df, use_container_width=True, hide_index=True)
                         
                         # 모든 농도 요약 테이블
-                        st.subheader("모든 농도 정규화 요약")
+                        st.subheader("Summary of All Concentration Normalization")
                         summary_data = []
                         for conc_name in conc_order:
                             n_data = norm_results[conc_name]
@@ -2380,10 +2380,10 @@ def data_load_mode(st):
                         output.seek(0)
                         xlsx_data = output.getvalue()
                         
-                        # 다운로드 파일명: 업로드 파일이 raw_* 이면 result_*.xlsx 로 저장
+                        # 다운로드 파일명: 업로드 파일이 raw_* 이면 results_*.xlsx 로 저장
                         uploaded_filename = results.get('uploaded_filename') or ''
                         if uploaded_filename.startswith('raw_'):
-                            base = 'result_' + uploaded_filename[4:].rsplit('.', 1)[0]
+                            base = 'results_' + uploaded_filename[4:].rsplit('.', 1)[0]
                             xlsx_download_name = base + '.xlsx'
                         else:
                             xlsx_download_name = 'Michaelis-Menten_calibration_results.xlsx'
@@ -2421,7 +2421,7 @@ def data_load_mode(st):
                                 except Exception as img_err:
                                     err_msg = str(img_err)
                                     if "kaleido" in err_msg.lower() or "chrome" in err_msg.lower():
-                                        err_msg += " → Chrome 설치 불필요. 터미널에서 'pip install -U kaleido' 실행 후 Streamlit 앱을 재시작해주세요. (kaleido 0.2+는 Chrome 없이 동작합니다.)"
+                                        err_msg += " → Chrome not required. Run 'pip install -U kaleido' in the terminal, then restart the Streamlit app. (kaleido 0.2+ works without Chrome.)"
                                     st.warning(f"Image generation failed ({name}): {err_msg}")
                         zip_buffer.seek(0)
                         zip_bytes = zip_buffer.getvalue()
@@ -2435,7 +2435,7 @@ def data_load_mode(st):
                                 help="Experimental Results, Normalization, Linear fit 등 분석에서 생성된 모든 그래프를 PNG로 저장한 ZIP 파일입니다."
                             )
                         else:
-                            st.caption("이미지 생성에 실패했습니다. kaleido 설치 후 Streamlit 앱을 재시작해주세요. (pip install -U kaleido)")
+                            st.caption("Image generation failed. Install kaleido and restart the Streamlit app. (pip install -U kaleido)")
                     except Exception as zip_err:
                         st.warning(f"Error preparing image ZIP: {zip_err}")
 
