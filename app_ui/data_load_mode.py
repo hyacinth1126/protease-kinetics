@@ -1936,42 +1936,42 @@ def data_load_mode(st):
                                 st.plotly_chart(fig_norm_scaled, use_container_width=True)
                         
                         # 정규화 방법 설명
-                        with st.expander("📖 정규화에 사용된 식", expanded=False):
+                        with st.expander("📖 Equations used for normalization", expanded=False):
                             st.markdown("""
-                            **정규화 과정:**
+                            **Normalization process:**
                             
-                            1. **1차 정규화 (임시 정규화)**
-                               - F₀ = 시간 0에서의 형광값 (F(t=0))
-                               - Fmax = 최대 형광값 (max(F))
-                               - 정규화: α_temp = (F - F₀) / (Fmax - F₀)
+                            1. **1st-order normalization (temporary normalization)**
+                               - F₀ = Fluorescence value at time 0 (F(t=0))
+                               - Fmax = Maximum fluorescence value (max(F))
+                               - Normalization: α_temp = (F - F₀) / (Fmax - F₀)
                             
-                            2. **2차 정규화 (Exponential 피팅)**
-                               - 정규화된 데이터에 대해 지수 함수 피팅
-                               - **정규화된 데이터 식**: F_norm(t) = F_max · [1 - exp(-k_obs · t)]
-                                 - F_norm(t): 정규화된 형광값 (0~1 범위)
-                                 - F_max: 정규화된 최대값 (보통 1.0)
-                                 - k_obs: 관찰된 반응 속도 상수 (분⁻¹)
-                                 - t: 시간 (분)
+                            2. **2nd-order normalization (exponential fitting)**
+                               - Exponential function fitting for normalized data
+                               - **Normalized data equation**: F_norm(t) = F_max · [1 - exp(-k_obs · t)]
+                                 - F_norm(t): Normalized fluorescence value (0–1 range)
+                                 - F_max: Normalized maximum value (usually 1.0)
+                                 - k_obs: Observed reaction rate constant (min⁻¹)
+                                 - t: Time (min)
                             
-                            3. **원본 데이터로 변환**
-                               - **원본 데이터 식**: F(t) = F₀ + (Fmax - F₀) · [1 - exp(-k_obs · t)]
-                                 - F(t): 시간 t에서의 형광값
-                                 - F₀: 초기 형광값
-                                 - Fmax: 최대 형광값
-                                 - k_obs: 관찰된 반응 속도 상수 (분⁻¹)
-                                 - t: 시간 (분)
+                            3. **Convert back to raw data**
+                               - **Raw data equation**: F(t) = F₀ + (Fmax - F₀) · [1 - exp(-k_obs · t)]
+                                 - F(t): Fluorescence value at time t
+                                 - F₀: Initial fluorescence value
+                                 - Fmax: Maximum fluorescence value
+                                 - k_obs: Observed reaction rate constant (min⁻¹)
+                                 - t: Time (min)
                             
-                            4. **초기 속도 (v₀) 계산**
+                            4. **Initial velocity (v₀)**
                                - v₀ = k_obs · (Fmax - F₀)
-                               - 단위: RFU/min (형광 단위/분)
+                               - Unit: RFU/min (fluorescence units/min)
                             
-                            5. **특성 시간 (τ)**
+                            5. **Characteristic time (τ)**
                                - τ = 1 / k_obs
-                               - 반응이 63.2% 완료되는 시간
+                               - Time for the reaction to reach 63.2% completion
                             
-                            **반복 정규화:**
-                            - 위 과정을 최소 2번 반복하여 정규화를 개선
-                            - 각 반복에서 피팅된 값을 역정규화하여 다음 반복에 사용
+                            **Iterative normalization:**
+                            - Repeat the above steps at least twice to improve normalization
+                            - In each iteration, denormalize the fitted values and use them for the next iteration
                             """)
                         
                         # 방정식 및 R² 테이블
