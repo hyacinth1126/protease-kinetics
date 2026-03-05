@@ -127,3 +127,5 @@ r_squared = 1 - (ss_res / ss_tot)
 - F(t) = F0 + v0 × t (선형 피팅)
 
 
+
+
