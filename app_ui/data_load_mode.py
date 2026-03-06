@@ -780,7 +780,8 @@ def _export_fig_to_png_via_playwright(fig, png_path, width=800, height=600):
                 page.goto(file_url, wait_until="networkidle", timeout=15000)
                 page.screenshot(path=png_path, full_page=False)
                 browser.close()
-        except Exception:
+        except Exception as e:
+            _debug_log(f"Playwright fallback failed: {e!r}")
             return False
         return os.path.isfile(png_path)
     finally:
