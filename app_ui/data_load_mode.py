@@ -487,7 +487,9 @@ def _build_exponential_increase_interp_fig(results):
         ),
         colorway=colors
     )
-    fig_mm.update_xaxes(range=[x_min_global - x_margin, x_max_global + x_margin])
+    # x-axis capped at 1.1 min for export/display
+    x_max_view = min(x_max_global + x_margin, 1.1)
+    fig_mm.update_xaxes(range=[x_min_global - x_margin, x_max_view])
     if exp_type == "Enzyme Concentration Variation (Fixed substrate)" and results.get('raw_data'):
         all_y_mm = [v for d in results['raw_data'].values() for v in d['value']]
         y_max_mm = max(all_y_mm) if all_y_mm else 1
