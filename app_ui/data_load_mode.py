@@ -733,8 +733,20 @@ def _build_all_export_figures(results):
     return result
 
 
+def _ensure_kaleido_browser_path():
+    """서버 환경(Streamlit Cloud 등)에서 Chromium 경로를 지정. packages.txt로 chromium 설치 시 Kaleido가 인식하도록."""
+    if os.environ.get("BROWSER_PATH"):
+        return
+    if sys.platform.startswith("linux"):
+        for candidate in ("/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"):
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                os.environ["BROWSER_PATH"] = candidate
+                return
+
+
 def _export_fig_to_png_bytes(fig, plot_name=None, width=800, height=600):
     """지정 비율로 PNG 바이트 반환. 실패 시 None. Export 탭 및 Run 직후 ZIP 사전 렌더링에 공통 사용."""
+    _ensure_kaleido_browser_path()
     fig = go.Figure(fig)
     legend_kw = dict(bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)", borderwidth=0)
     if plot_name == "Time_Fluorescence_Interpolated_Curves":
@@ -3082,8 +3094,9 @@ def data_load_mode(st):
                             )
                         else:
                             st.warning(
-                                f"PNG export failed for {name}. Install/upgrade kaleido and ensure Chrome is available: "
-                                "`pip install -U 'kaleido>=1.0.0'`. If using Kaleido 1.x, install Chrome or run `plotly_get_chrome`."
+                                f"PNG export failed for {name}. "
+                                "Kaleido 1.x needs Chrome/Chromium: on **Streamlit Cloud** add a repo-root `packages.txt` with the line `chromium` and redeploy; "
+                                "locally run `plotly_get_chrome` or install Chrome."
                             )
 
                         # 진행률 업데이트 (렌더링 중일 때만)
@@ -3119,8 +3132,8 @@ def data_load_mode(st):
                         else:
                             st.info(
                                 "All plot PNG conversions failed. "
-                                "Restart the app after `pip install -U 'kaleido>=1.0.0'`. "
-                                "Kaleido 1.x requires Chrome/Chromium. If Chrome is not installed, run `plotly_get_chrome` in the terminal."
+                                "Kaleido 1.x requires Chrome/Chromium: on **Streamlit Cloud** add a repo-root `packages.txt` with the line `chromium` and redeploy; "
+                                "locally run `plotly_get_chrome` or install Chrome."
                             )
 
                     # 모든 플롯이 성공적으로 렌더링된 경우에만 ZIP 데이터 생성

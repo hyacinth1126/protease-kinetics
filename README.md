@@ -95,6 +95,8 @@ streamlit run app.py
      `.streamlit/config.toml`에 `server.address = "0.0.0.0"` 이 있어야 health check가 통과합니다. (이미 설정됨)
   3. **의존성**  
      `requirements.txt`에 `protobuf>=3.20,<6` 제한이 있어야 합니다. (이미 추가됨)
+  4. **Export plots 탭에서 PNG 다운로드**  
+     Kaleido 1.x는 Chrome/Chromium이 필요합니다. Cloud에서는 저장소 루트의 `packages.txt`에 `chromium` 한 줄이 있으면 자동 설치됩니다. (이미 추가됨)
 - 로컬에서는 `streamlit run app.py` 만 실행하면 됩니다.
 
 ---
@@ -109,6 +111,7 @@ streamlit run app.py
 |-------------|------|
 | **`app.py`** | Streamlit 앱 진입점. 모드 선택 후 해당 UI로 분기합니다. |
 | **`app_cloud_debug.py`** | Cloud 디버깅용 최소 앱. spawn error 시 Main file을 이걸로 바꿔 환경 정상 여부를 확인할 수 있습니다. |
+| **`packages.txt`** | Cloud 배포 시 apt로 설치할 패키지 목록. `chromium`으로 Export plots PNG 내보내기가 동작합니다. |
 | **`app_ui/`** | 웹 UI 코드. Data Load / Model Simulation 모드 화면과 로직을 담당합니다. |
 | **`mode_prep_raw_data/`** | 원본(raw) 데이터 읽기, 시간–곡선 피팅, MM/선형 보정, 초기 속도(v₀) 계산 등 **Data Load 모드의 핵심 연산**을 수행합니다. |
 | **`data_interpolation_mode/`** | Prism 스타일 보간(Exponential Association 등). 보간 곡선 생성 및 결과 저장을 담당합니다. |

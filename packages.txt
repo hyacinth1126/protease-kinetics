@@ -1,0 +1,3 @@
+# Kaleido 1.x가 Plotly PNG 내보내기에 사용하는 Chrome/Chromium (Streamlit Cloud 등 서버 환경용)
+# 로컬에서는 필요 시 브라우저만 설치하면 됨.
+chromium
