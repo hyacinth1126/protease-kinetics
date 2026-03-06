@@ -26,6 +26,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
+import plotly.io as pio
+import streamlit.components.v1 as components
 from PIL import Image
 _debug_log("module load: numpy, pandas, streamlit, plotly, PIL done")
 
@@ -839,6 +841,150 @@ def _export_fig_to_png_bytes(fig, plot_name=None, width=800, height=600):
                 os.unlink(fpath)
             except OSError:
                 pass
+
+
+def _safe_png_filename(name: str) -> str:
+    s = str(name or "plot").strip()
+    s = re.sub(r"\s+", "_", s)
+    s = re.sub(r"[^a-zA-Z0-9._-]+", "_", s)
+    return s[:180] or "plot"
+
+
+def _render_client_side_png_download(fig, name: str, *, width=800, height=600, scale=2, iframe_height=720) -> None:
+    """
+    서버측 PNG 생성이 실패할 때 폴백.
+    iframe 내부에 figure를 렌더링하고, JS로 Plotly.downloadImage를 호출하는 버튼을 제공한다.
+    """
+    fig = go.Figure(fig)
+    div_id = f"plot_{abs(hash((name, width, height, scale))) % 10_000_000}"
+    filename = _safe_png_filename(name)
+    plot_html = pio.to_html(
+        fig,
+        include_plotlyjs="cdn",
+        full_html=False,
+        config={"displayModeBar": True, "responsive": True},
+        div_id=div_id,
+    )
+    html = f"""
+<div style="display:flex; align-items:center; gap:8px; margin: 6px 0 10px 0;">
+  <button id="{div_id}_dl" style="
+    padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(49,51,63,0.2);
+    background: white; cursor: pointer; font-size: 14px;
+  ">
+    ⬇️ Download PNG (browser)
+  </button>
+  <span style="font-size:12px; color: rgba(49,51,63,0.7);">
+    (This does not use Kaleido/Chrome on the server.)
+  </span>
+</div>
+{plot_html}
+<script>
+  (function() {{
+    const btn = document.getElementById("{div_id}_dl");
+    const gd = document.getElementById("{div_id}");
+    if (!btn || !gd || typeof Plotly === "undefined") return;
+    btn.addEventListener("click", () => {{
+      Plotly.downloadImage(gd, {{
+        format: "png",
+        filename: "{filename}",
+        width: {int(width)},
+        height: {int(height)},
+        scale: {int(scale)}
+      }});
+    }});
+  }})();
+</script>
+"""
+    components.html(html, height=iframe_height, scrolling=False)
+
+
+def _render_client_side_download_all(fig_list, *, width=900, height=650, scale=2, iframe_height=110) -> None:
+    """
+    Export 탭 상단(기존 ZIP 버튼 자리)용.
+    서버측 PNG 변환이 실패하는 환경(Cloud 등)에서 브라우저가 Plotly.downloadImage를 플롯별로 순차 실행하도록 버튼을 제공한다.
+
+    주의: 브라우저가 다중 다운로드를 차단할 수 있으며, 이 경우 사용자가 사이트별 "다중 파일 다운로드 허용"을 켜야 한다.
+    """
+    import json
+
+    # 최소 정보만 전달 (data/layout만)
+    payload = []
+    for name, fig in fig_list:
+        f = go.Figure(fig)
+        pj = f.to_plotly_json()
+        payload.append(
+            {
+                "name": _safe_png_filename(name),
+                "data": pj.get("data", []),
+                "layout": pj.get("layout", {}),
+            }
+        )
+
+    div_id = f"dlall_{abs(hash(tuple(item['name'] for item in payload))) % 10_000_000}"
+    payload_json = json.dumps(payload)
+
+    html = f"""
+<div style="display:flex; align-items:center; justify-content:flex-end; gap:10px;">
+  <button id="{div_id}_btn" style="
+    padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(49,51,63,0.25);
+    background: white; cursor: pointer; font-size: 14px; width: 100%;
+  ">
+    📥 Download ALL PNGs (browser)
+  </button>
+</div>
+<div id="{div_id}_status" style="text-align:right; font-size:12px; color: rgba(49,51,63,0.65); margin-top:6px;">
+  서버 PNG 변환이 실패할 때 브라우저로 다운로드합니다.
+</div>
+<div id="{div_id}_scratch" style="width:0;height:0;overflow:hidden;"></div>
+<script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+<script>
+  (function() {{
+    const figs = {payload_json};
+    const btn = document.getElementById("{div_id}_btn");
+    const status = document.getElementById("{div_id}_status");
+    const scratch = document.getElementById("{div_id}_scratch");
+    if (!btn || !status || !scratch) return;
+
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    btn.addEventListener("click", async () => {{
+      if (typeof Plotly === "undefined") {{
+        status.textContent = "Plotly 로딩 실패. 잠시 후 다시 시도하세요.";
+        return;
+      }}
+      btn.disabled = true;
+      btn.style.opacity = "0.7";
+      try {{
+        for (let i = 0; i < figs.length; i++) {{
+          const item = figs[i];
+          status.textContent = `다운로드 중... (${i+1}/${{figs.length}}) ${{item.name}}.png`;
+          const div = document.createElement("div");
+          scratch.appendChild(div);
+          // offscreen plot 생성
+          await Plotly.newPlot(div, item.data, item.layout, {{displayModeBar: false, responsive: false}});
+          await Plotly.downloadImage(div, {{
+            format: "png",
+            filename: item.name,
+            width: {int(width)},
+            height: {int(height)},
+            scale: {int(scale)}
+          }});
+          await Plotly.purge(div);
+          div.remove();
+          await sleep(350);
+        }}
+        status.textContent = "완료. 다운로드가 막히면 브라우저에서 '다중 다운로드 허용'을 켜주세요.";
+      }} catch (e) {{
+        status.textContent = "실패: " + (e && e.message ? e.message : String(e));
+      }} finally {{
+        btn.disabled = false;
+        btn.style.opacity = "1";
+      }}
+    }});
+  }})();
+</script>
+"""
+    components.html(html, height=iframe_height, scrolling=False)
 
 
 def _render_export_plots_to_png(results):
@@ -3084,6 +3230,13 @@ def data_load_mode(st):
                     fig_list = _build_all_export_figures(results)
                     total_plots = len(fig_list)
 
+                    # 상단 버튼(기존 ZIP 자리): 기본은 "렌더링 상태" -> 성공 시 ZIP, 실패 시 브라우저 일괄 다운로드 버튼
+                    with _zip_button_placeholder.container():
+                        if total_plots > 0:
+                            st.caption("⬇️ Download options")
+                        else:
+                            st.caption("No plots to export")
+
                     # 이전에 렌더링한 PNG 캐시가 있으면 재사용 (ZIP 클릭 등으로 재실행 시 재렌더링 방지)
                     cache_version = st.session_state.get("export_cache_version")
                     cache = st.session_state.get("export_plots_cache", {})
@@ -3123,7 +3276,6 @@ def data_load_mode(st):
                     st.markdown("### Preview and save individual plots")
                     for idx, (name, fig) in enumerate(fig_list):
                         st.markdown(f"**{idx + 1}. {name}**")
-                        st.plotly_chart(fig, use_container_width=True)
 
                         if use_cache:
                             png_bytes = export_results[idx]["png_bytes"]
@@ -3137,6 +3289,7 @@ def data_load_mode(st):
                             )
 
                         if png_bytes:
+                            st.plotly_chart(fig, use_container_width=True)
                             st.download_button(
                                 label=f"💾 Save PNG ({name})",
                                 data=png_bytes,
@@ -3146,10 +3299,10 @@ def data_load_mode(st):
                                 key=f"export_png_{idx}"
                             )
                         else:
-                            st.warning(
-                                f"PNG export failed for {name}. "
-                                "Install Chrome (or run `plotly_get_chrome` locally). On Cloud, use a screenshot or run the app locally to save PNGs."
+                            st.info(
+                                "서버에서 PNG 변환이 실패했습니다. 아래 버튼은 **브라우저에서 직접 PNG를 다운로드**합니다."
                             )
+                            _render_client_side_png_download(fig, name, width=900, height=650, scale=2, iframe_height=760)
 
                         # 진행률 업데이트 (렌더링 중일 때만)
                         if not use_cache and progress_bar is not None and total_plots > 0:
@@ -3224,8 +3377,9 @@ def data_load_mode(st):
                             if total_plots == 0:
                                 st.caption("No plots to export")
                             else:
-                                st.caption("⏳ Enabled when rendering completes")
-                                st.caption(f"({len(successful_exports)}/{total_plots} successful)")
+                                # 서버 PNG가 일부/전체 실패한 경우: 브라우저에서 일괄 PNG 다운로드 버튼 제공
+                                st.caption(f"Server PNG: {len(successful_exports)}/{total_plots} successful")
+                                _render_client_side_download_all(fig_list, width=900, height=650, scale=2, iframe_height=120)
 
                 except Exception as export_err:
                     st.warning(f"Error in Export Plots tab: {export_err}")

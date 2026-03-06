@@ -284,6 +284,24 @@
         "documentation": {}
     },
     {
+        "label": "plotly.io",
+        "kind": 6,
+        "isExtraImport": true,
+        "importPath": "plotly.io",
+        "description": "plotly.io",
+        "detail": "plotly.io",
+        "documentation": {}
+    },
+    {
+        "label": "streamlit.components.v1",
+        "kind": 6,
+        "isExtraImport": true,
+        "importPath": "streamlit.components.v1",
+        "description": "streamlit.components.v1",
+        "detail": "streamlit.components.v1",
+        "documentation": {}
+    },
+    {
         "label": "Image",
         "importPath": "PIL",
         "description": "PIL",
@@ -686,7 +704,7 @@
         "kind": 5,
         "importPath": "app_ui.data_load_mode",
         "description": "app_ui.data_load_mode",
-        "peekOfCode": "_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), \"..\"))\nif _PROJECT_ROOT not in sys.path:\n    sys.path.insert(0, _PROJECT_ROOT)\n_debug_log(\"module load: sys.path set\")\nimport numpy as np\nimport pandas as pd\nimport streamlit as st\nimport plotly.graph_objects as go\nfrom PIL import Image\n_debug_log(\"module load: numpy, pandas, streamlit, plotly, PIL done\")",
+        "peekOfCode": "_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), \"..\"))\nif _PROJECT_ROOT not in sys.path:\n    sys.path.insert(0, _PROJECT_ROOT)\n_debug_log(\"module load: sys.path set\")\nimport numpy as np\nimport pandas as pd\nimport streamlit as st\nimport plotly.graph_objects as go\nimport plotly.io as pio\nimport streamlit.components.v1 as components",
         "detail": "app_ui.data_load_mode",
         "documentation": {}
     },
