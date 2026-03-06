@@ -1,5 +1,14 @@
 import os
 import re
+import sys
+import tempfile
+import time
+
+# 프로젝트 루트를 path에 추가 (mode_prep_raw_data, data_interpolation_mode 등 import 위해)
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -238,11 +247,16 @@ def _build_experimental_fig(results):
                 marker=dict(size=8, color=color, symbol='circle', line=dict(width=1, color='white')),
                 legendgroup=conc_name, showlegend=True
             ))
+    # x,y축과 동일한 글씨색 (plotly_white 축 라벨/눈금 색상)
+    axis_font_color = "#2a3f5f"
     fig.update_layout(
+        title='Time-Fluorescence plot',
         xaxis_title='Time (min)', yaxis_title='RFU', height=600, template='plotly_white',
         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', hovermode='x unified',
+        xaxis=dict(showline=True, mirror=True, ticks='outside', title_font=dict(color=axis_font_color), tickfont=dict(color=axis_font_color)),
+        yaxis=dict(showline=True, mirror=True, ticks='outside', title_font=dict(color=axis_font_color), tickfont=dict(color=axis_font_color)),
         legend=dict(orientation="v", yanchor="bottom", y=0.05, xanchor="right", x=0.99,
-                   bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)", borderwidth=0, font=dict(color="black"))
+                   bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)", borderwidth=0, font=dict(color=axis_font_color))
     )
     x_min, x_max = results['x_data_min'], results['x_data_max']
     x_span = x_max - x_min
@@ -250,6 +264,238 @@ def _build_experimental_fig(results):
     fig.update_xaxes(range=[x_min - x_margin, x_max + x_margin])
     fig.update_yaxes(rangemode='tozero')
     return fig
+
+
+def _build_interpolated_curves_fig(results):
+    """Time-Fluorescence Interpolated Curves figure (export용). interp_df 없으면 None."""
+    interp_df = results.get('interp_df')
+    if interp_df is None or 'Time_min' not in interp_df.columns or 'RFU_Interpolated' not in interp_df.columns:
+        return None
+    exp_type = results.get('mm_fit_results', {}).get('experiment_type', 'Substrate Concentration Variation (Standard Michaelis-Menten)')
+    conc_col = None
+    for col in ['Concentration [μM]', 'Concentration [ug/mL]']:
+        if col in results['mm_results_df'].columns:
+            conc_col = col
+            break
+    conc_order = results['mm_results_df'].sort_values(conc_col)['Concentration'].tolist() if conc_col else results['mm_results_df']['Concentration'].tolist()
+    colors = ['blue', 'red', 'orange', 'green', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+    conc_col_interp = 'Concentration [μM]' if 'Concentration [μM]' in interp_df.columns else ('Concentration [ug/mL]' if 'Concentration [ug/mL]' in interp_df.columns else None)
+    x_min = results['x_data_min']
+    x_max = results['x_data_max']
+    x_span = x_max - x_min
+    x_margin = max(x_span * 0.03, 0.2) if x_span > 0 else 0.2
+
+    fig_mm = go.Figure()
+    for idx, conc_name in enumerate(conc_order):
+        color = colors[idx % len(colors)]
+        conc_match = re.search(r'(\d+\.?\d*)', conc_name)
+        legend_name = f"{float(conc_match.group(1))} μM" if conc_match and "Substrate" in exp_type else (f"{float(conc_match.group(1))} μg/mL" if conc_match else conc_name)
+        if 'raw_data' in results and conc_name in results['raw_data']:
+            raw_conc_data = results['raw_data'][conc_name]
+            fig_mm.add_trace(go.Scatter(
+                x=raw_conc_data['time'],
+                y=raw_conc_data['value'],
+                mode='markers',
+                name=legend_name,
+                marker=dict(size=8, color=color, symbol='circle', line=dict(width=1, color='white')),
+                legendgroup=conc_name,
+                showlegend=True
+            ))
+            if raw_conc_data.get('SD') is not None and exp_type == "Enzyme Concentration Variation (Fixed substrate)":
+                sd_values = raw_conc_data['SD']
+                if isinstance(sd_values, (list, np.ndarray)):
+                    has_nonzero_sd = np.any(np.array(sd_values) > 0)
+                else:
+                    has_nonzero_sd = sd_values > 0 if sd_values is not None else False
+                if has_nonzero_sd:
+                    fig_mm.add_trace(go.Scatter(
+                        x=raw_conc_data['time'],
+                        y=raw_conc_data['value'],
+                        error_y=dict(type='data', array=sd_values, visible=True, color=color, thickness=1.5),
+                        mode='markers',
+                        marker=dict(size=0, opacity=0),
+                        legendgroup=conc_name,
+                        showlegend=False
+                    ))
+        if 'Concentration' in interp_df.columns:
+            curve_df = interp_df[interp_df['Concentration'] == conc_name].sort_values('Time_min')
+        elif conc_col_interp and conc_col_interp in interp_df.columns and conc_col is not None:
+            conc_val = results['mm_results'][conc_name]['concentration'] if conc_name in results.get('mm_results', {}) else None
+            if conc_val is not None:
+                curve_df = interp_df[interp_df[conc_col_interp] == conc_val].sort_values('Time_min')
+            else:
+                curve_df = pd.DataFrame()
+        else:
+            curve_df = pd.DataFrame()
+        if len(curve_df) > 0:
+            fig_mm.add_trace(go.Scatter(
+                x=curve_df['Time_min'].values,
+                y=curve_df['RFU_Interpolated'].values,
+                mode='lines',
+                name=legend_name,
+                line=dict(color=color, width=2, dash='solid'),
+                legendgroup=conc_name,
+                showlegend=False
+            ))
+    fig_mm.update_layout(
+        title='Time-Fluorescence Interpolated Curves',
+        xaxis_title='Time (min)',
+        yaxis_title='RFU',
+        height=600,
+        template='plotly_white',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        hovermode='x unified',
+        xaxis=dict(showline=True, mirror=True, ticks='outside'),
+        yaxis=dict(showline=True, mirror=True, ticks='outside'),
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=0.99,
+            xanchor="right",
+            x=0.99,
+            xref="paper",
+            yref="paper",
+            bgcolor="rgba(255,255,255,0.95)",
+            bordercolor="rgba(0,0,0,0)",
+            borderwidth=0,
+            font=dict(size=12, color="#333333"),
+            traceorder="normal"
+        ),
+        colorway=colors
+    )
+    fig_mm.update_xaxes(range=[x_min - x_margin, x_max + x_margin])
+    if exp_type == "Enzyme Concentration Variation (Fixed substrate)" and results.get('raw_data'):
+        all_y_mm = [v for d in results['raw_data'].values() for v in d['value']]
+        y_max_mm = max(all_y_mm) if all_y_mm else 1
+        y_pad_bottom_mm = max(0.02 * y_max_mm, 50)
+        fig_mm.update_yaxes(range=[-y_pad_bottom_mm, y_max_mm * 1.02])
+    else:
+        fig_mm.update_yaxes(rangemode='tozero')
+    return fig_mm
+
+
+def _build_exponential_increase_interp_fig(results):
+    """농도별 interpolated curve에서 exponential increase 구간(0 ~ 3τ)만 잘라 Time-Flu Interpolated Curves와 동일한 플롯 디자인으로 그린 figure. export/UI 공용."""
+    interp_df = results.get('interp_df')
+    norm_results = results.get('normalization_results')
+    if interp_df is None or not norm_results or 'Time_min' not in interp_df.columns or 'RFU_Interpolated' not in interp_df.columns:
+        return None
+    exp_type = results.get('mm_fit_results', {}).get('experiment_type', 'Substrate Concentration Variation (Standard Michaelis-Menten)')
+    conc_col = None
+    for col in ['Concentration [μM]', 'Concentration [ug/mL]']:
+        if col in results['mm_results_df'].columns:
+            conc_col = col
+            break
+    conc_order = sorted(norm_results.keys(), key=lambda x: norm_results[x]['concentration'])
+    conc_col_interp = 'Concentration [μM]' if 'Concentration [μM]' in interp_df.columns else ('Concentration [ug/mL]' if 'Concentration [ug/mL]' in interp_df.columns else None)
+    colors = ['blue', 'red', 'orange', 'green', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+
+    fig_mm = go.Figure()
+    x_min_global = 0.0
+    x_max_global = 0.0
+    for idx, conc_name in enumerate(conc_order):
+        color = colors[idx % len(colors)]
+        conc_match = re.search(r'(\d+\.?\d*)', conc_name)
+        legend_name = f"{float(conc_match.group(1))} μM" if conc_match and "Substrate" in exp_type else (f"{float(conc_match.group(1))} μg/mL" if conc_match else conc_name)
+        n_data = norm_results.get(conc_name)
+        tau = n_data.get('tau') if n_data else None
+        t_cut = (3.0 * tau) if (tau is not None and not np.isinf(tau) and tau > 0) else None
+
+        if 'raw_data' in results and conc_name in results['raw_data']:
+            raw_conc_data = results['raw_data'][conc_name]
+            t_raw = np.asarray(raw_conc_data['time'])
+            v_raw = np.asarray(raw_conc_data['value'])
+            mask_raw = (t_raw <= t_cut) if t_cut is not None else np.ones(len(t_raw), dtype=bool)
+            t_raw = t_raw[mask_raw]
+            v_raw = v_raw[mask_raw]
+            if len(t_raw) > 0:
+                fig_mm.add_trace(go.Scatter(
+                    x=t_raw,
+                    y=v_raw,
+                    mode='markers',
+                    name=legend_name,
+                    marker=dict(size=8, color=color, symbol='circle', line=dict(width=1, color='white')),
+                    legendgroup=conc_name,
+                    showlegend=True
+                ))
+                if raw_conc_data.get('SD') is not None and exp_type == "Enzyme Concentration Variation (Fixed substrate)":
+                    sd_values = np.asarray(raw_conc_data['SD'])
+                    if len(sd_values) == len(mask_raw):
+                        sd_values = sd_values[mask_raw]
+                    if len(sd_values) > 0 and np.any(sd_values > 0):
+                        fig_mm.add_trace(go.Scatter(
+                            x=t_raw, y=v_raw,
+                            error_y=dict(type='data', array=sd_values, visible=True, color=color, thickness=1.5),
+                            mode='markers', marker=dict(size=0, opacity=0),
+                            legendgroup=conc_name, showlegend=False
+                        ))
+
+        if 'Concentration' in interp_df.columns:
+            curve_df = interp_df[interp_df['Concentration'] == conc_name].sort_values('Time_min')
+        elif conc_col_interp and conc_col is not None:
+            conc_val = results.get('mm_results', {}).get(conc_name, {}).get('concentration')
+            if conc_val is not None:
+                curve_df = interp_df[interp_df[conc_col_interp] == conc_val].sort_values('Time_min')
+            else:
+                curve_df = pd.DataFrame()
+        else:
+            curve_df = pd.DataFrame()
+
+        if len(curve_df) > 0:
+            if t_cut is not None:
+                curve_df = curve_df[curve_df['Time_min'] <= t_cut]
+            if len(curve_df) > 0:
+                fig_mm.add_trace(go.Scatter(
+                    x=curve_df['Time_min'].values,
+                    y=curve_df['RFU_Interpolated'].values,
+                    mode='lines',
+                    name=legend_name,
+                    line=dict(color=color, width=2, dash='solid'),
+                    legendgroup=conc_name,
+                    showlegend=False
+                ))
+                x_max_global = max(x_max_global, curve_df['Time_min'].max())
+    if x_max_global <= 0:
+        return None
+    x_span = x_max_global - x_min_global
+    x_margin = max(x_span * 0.03, 0.2) if x_span > 0 else 0.2
+    fig_mm.update_layout(
+        title='Time–Fluorescence: Exponential increase only (by concentration)',
+        xaxis_title='Time (min)',
+        yaxis_title='RFU',
+        height=600,
+        template='plotly_white',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        hovermode='x unified',
+        xaxis=dict(showline=True, mirror=True, ticks='outside'),
+        yaxis=dict(showline=True, mirror=True, ticks='outside'),
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=0.99,
+            xanchor="right",
+            x=0.99,
+            xref="paper",
+            yref="paper",
+            bgcolor="rgba(255,255,255,0.95)",
+            bordercolor="rgba(0,0,0,0)",
+            borderwidth=0,
+            font=dict(size=12, color="#333333"),
+            traceorder="normal"
+        ),
+        colorway=colors
+    )
+    fig_mm.update_xaxes(range=[x_min_global - x_margin, x_max_global + x_margin])
+    if exp_type == "Enzyme Concentration Variation (Fixed substrate)" and results.get('raw_data'):
+        all_y_mm = [v for d in results['raw_data'].values() for v in d['value']]
+        y_max_mm = max(all_y_mm) if all_y_mm else 1
+        y_pad_bottom_mm = max(0.02 * y_max_mm, 50)
+        fig_mm.update_yaxes(range=[-y_pad_bottom_mm, y_max_mm * 1.02])
+    else:
+        fig_mm.update_yaxes(rangemode='tozero')
+    return fig_mm
 
 
 def _build_norm_fig_full(norm_data, exp_type):
@@ -280,7 +526,8 @@ def _build_norm_fig_full(norm_data, exp_type):
         xaxis_title='Time (min)', yaxis_title='Fluorescence intensity (a.u.)',
         title='Enzyme-quenched peptide fluorescence kinetics', height=600, template='plotly_white',
         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', hovermode='x unified',
-        yaxis=dict(range=[0, 1.20]), xaxis=dict(range=[t_min, t_max]),
+        yaxis=dict(range=[0, 1.20], showline=True, mirror=True, ticks='outside'),
+        xaxis=dict(range=[t_min, t_max], showline=True, mirror=True, ticks='outside'),
         legend=dict(orientation="v", yanchor="bottom", y=0.05, xanchor="right", x=0.99, bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)", borderwidth=0)
     )
     return fig
@@ -327,7 +574,8 @@ def _build_norm_fig_uptoy1(norm_data, exp_type):
         xaxis_title='Time (min)', yaxis_title='Fluorescence intensity (a.u.)',
         title='Enzyme-quenched peptide fluorescence kinetics up to plateau', height=600, template='plotly_white',
         plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', hovermode='x unified',
-        yaxis=dict(range=[0, 1.20]), xaxis=dict(range=[t_min, t_display_max]),
+        yaxis=dict(range=[0, 1.20], showline=True, mirror=True, ticks='outside'),
+        xaxis=dict(range=[t_min, t_display_max], showline=True, mirror=True, ticks='outside'),
         legend=dict(orientation="v", yanchor="bottom", y=0.05, xanchor="right", x=0.99, bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)", borderwidth=0)
     )
     return fig
@@ -353,7 +601,10 @@ def _build_v0_fig(results):
             title='Initial Velocity (v₀) vs Substrate Concentration [S]',
             xaxis_title='[S] (μM)', yaxis_title='Initial Velocity v₀ (Fluorescence Units / Time)',
             template='plotly_white', height=600, hovermode='x unified',
-            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+            xaxis=dict(showline=True, mirror=True, ticks='outside'),
+            yaxis=dict(showline=True, mirror=True, ticks='outside'),
+            legend=dict(orientation='v', x=0.02, y=0.98, xanchor='left', yanchor='top', bgcolor='rgba(255,255,255,0.85)')
         )
     else:
         if mm_fit.get('fit_success') and mm_fit.get('slope') is not None:
@@ -367,7 +618,10 @@ def _build_v0_fig(results):
             title='Initial Velocity (v₀) vs Enzyme Concentration [E] (Constant Substrate)',
             xaxis_title='[E] (μg/mL)', yaxis_title='Initial Velocity v₀ (Fluorescence Units / Time)',
             template='plotly_white', height=600, hovermode='x unified',
-            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+            xaxis=dict(showline=True, mirror=True, ticks='outside'),
+            yaxis=dict(showline=True, mirror=True, ticks='outside'),
+            legend=dict(orientation='v', x=0.02, y=0.98, xanchor='left', yanchor='top', bgcolor='rgba(255,255,255,0.85)')
         )
     return fig
 
@@ -377,6 +631,12 @@ def _build_all_export_figures(results):
     out = []
     exp_type = results.get('mm_fit_results', {}).get('experiment_type', 'Substrate Concentration Variation (Standard Michaelis-Menten)')
     out.append(("Experimental_Results", _build_experimental_fig(results)))
+    fig_interp = _build_interpolated_curves_fig(results)
+    if fig_interp is not None:
+        out.append(("Time_Fluorescence_Interpolated_Curves", fig_interp))
+    fig_exp_only = _build_exponential_increase_interp_fig(results)
+    if fig_exp_only is not None:
+        out.append(("Exponential_Increase_All_Concentrations", fig_exp_only))
     if 'normalization_results' in results and results['normalization_results']:
         norm_results = results['normalization_results']
         conc_order = sorted(norm_results.keys(), key=lambda x: norm_results[x]['concentration'])
@@ -392,7 +652,66 @@ def _build_all_export_figures(results):
             out.append(("v0_vs_S_Fit", _build_v0_fig(results)))
         else:
             out.append(("Linear_fit", _build_v0_fig(results)))
-    return out
+    # 모든 플롯에 x/y축 눈금(ticks) 및 축선 적용
+    result = []
+    for name, fig in out:
+        f = go.Figure(fig)
+        f.update_xaxes(showline=True, mirror=True, ticks="outside")
+        f.update_yaxes(showline=True, mirror=True, ticks="outside")
+        result.append((name, f))
+    return result
+
+
+def _export_fig_to_png_bytes(fig, plot_name=None, width=800, height=600):
+    """지정 비율로 PNG 바이트 반환. 실패 시 None. Export 탭 및 Run 직후 ZIP 사전 렌더링에 공통 사용."""
+    fig = go.Figure(fig)
+    legend_kw = dict(bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)", borderwidth=0)
+    if plot_name in ("Time_Fluorescence_Interpolated_Curves", "Exponential_Increase_All_Concentrations"):
+        legend_kw.update(
+            orientation="v",
+            yanchor="bottom",
+            y=0.01,
+            xanchor="right",
+            x=0.99,
+            xref="paper",
+            yref="paper",
+        )
+    fig.update_layout(
+        width=width,
+        height=height,
+        legend=legend_kw,
+        title=dict(x=0.5, xanchor="center"),
+    )
+    fig.update_xaxes(showgrid=False, showline=True, mirror=True, ticks="outside", zeroline=False)
+    fig.update_yaxes(showgrid=False, showline=True, mirror=True, ticks="outside", zeroline=False)
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    fpath = tmp.name
+    tmp.close()
+    try:
+        try:
+            fig.write_image(fpath, format="png", scale=2, engine="kaleido")
+        except Exception:
+            fig.write_image(fpath, format="png", scale=2)
+        with open(fpath, "rb") as f:
+            return f.read()
+    except Exception:
+        return None
+    finally:
+        if os.path.exists(fpath):
+            try:
+                os.unlink(fpath)
+            except OSError:
+                pass
+
+
+def _render_export_plots_to_png(results):
+    """모든 Export용 플롯을 PNG로 렌더링하여 [{'name': str, 'png_bytes': bytes|None}, ...] 반환. Run 직후 ZIP 사전 준비용."""
+    fig_list = _build_all_export_figures(results)
+    export_results = []
+    for name, fig in fig_list:
+        png_bytes = _export_fig_to_png_bytes(fig, plot_name=name)
+        export_results.append({"name": name, "png_bytes": png_bytes})
+    return export_results
 
 
 def normalize_iterative(times, values, num_iterations=2):
@@ -559,8 +878,6 @@ def data_load_mode(st):
     st.markdown("---")
     
     # Sidebar configuration
-    st.sidebar.title("⚙️ Data Load Settings")
-    
     # Experiment condition selection (before file upload)
     st.sidebar.subheader("🔬 Experiment Condition")
     experiment_type = st.sidebar.radio(
@@ -1314,7 +1631,19 @@ def data_load_mode(st):
                 'normalization_results': normalization_results,  # 정규화 결과 추가
                 'uploaded_filename': os.path.basename(uploaded_file.name) if uploaded_file is not None else None  # 다운로드 파일명용 (경로 제외)
             }
-            
+            # Export Plots 캐시 무효화: 결과가 바뀌면 ZIP용 PNG를 다시 렌더링
+            st.session_state['export_cache_version'] = time.time()
+
+            # Export Plots 탭을 열지 않아도 ZIP 다운로드 준비: 플롯을 미리 PNG로 렌더링해 캐시에 저장
+            with st.spinner("Preparing export plots for ZIP..."):
+                _results = st.session_state['interpolation_results']
+                _export_results = _render_export_plots_to_png(_results)
+                if _export_results:
+                    st.session_state['export_plots_cache'] = {
+                        'version': st.session_state['export_cache_version'],
+                        'export_results': _export_results,
+                    }
+
             # 결과 적용 플래그 설정
             st.session_state['mm_data_ready'] = True
     
@@ -1515,6 +1844,8 @@ def data_load_mode(st):
                     plot_bgcolor='rgba(0,0,0,0)',
                     paper_bgcolor='rgba(0,0,0,0)',
                     hovermode='x unified',
+                    xaxis=dict(showline=True, mirror=True, ticks='outside'),
+                    yaxis=dict(showline=True, mirror=True, ticks='outside'),
                     legend=dict(
                         orientation="v",
                         yanchor="middle",
@@ -1621,6 +1952,8 @@ def data_load_mode(st):
                         plot_bgcolor='rgba(0,0,0,0)',
                         paper_bgcolor='rgba(0,0,0,0)',
                         hovermode='x unified',
+                        xaxis=dict(showline=True, mirror=True, ticks='outside'),
+                        yaxis=dict(showline=True, mirror=True, ticks='outside'),
                         legend=dict(
                             orientation="v",
                             yanchor="middle",
@@ -1875,9 +2208,9 @@ def data_load_mode(st):
                             hovermode='x unified',
                             # Y축 범위를 0-1로 고정 (정규화된 데이터)
                             # annotation이 잘 보이도록 범위 확장
-                            yaxis=dict(range=[0, 1.20]),  # annotation 공간 확보
+                            yaxis=dict(range=[0, 1.20], showline=True, mirror=True, ticks='outside'),
                             # X축 범위를 데이터 범위로 제한
-                            xaxis=dict(range=[t_min, t_max]),
+                            xaxis=dict(range=[t_min, t_max], showline=True, mirror=True, ticks='outside'),
                             legend=dict(
                                 orientation="v",
                                 yanchor="bottom",
@@ -2065,8 +2398,8 @@ def data_load_mode(st):
                                     plot_bgcolor='rgba(0,0,0,0)',
                                     paper_bgcolor='rgba(0,0,0,0)',
                                     hovermode='x unified',
-                                    yaxis=dict(range=[0, 1.20]),
-                                    xaxis=dict(range=[t_min, t_display_max]),
+                                    yaxis=dict(range=[0, 1.20], showline=True, mirror=True, ticks='outside'),
+                                    xaxis=dict(range=[t_min, t_display_max], showline=True, mirror=True, ticks='outside'),
                                     legend=dict(
                                         orientation="v",
                                         yanchor="bottom",
@@ -2155,6 +2488,13 @@ def data_load_mode(st):
                         }
                         param_df = pd.DataFrame(param_data)
                         st.dataframe(param_df, use_container_width=True, hide_index=True)
+                        
+                        # 농도별 exponential increase 구간만 (Time-Flu 인터폴레이션 플롯 디자인)
+                        fig_exponential_only = _build_exponential_increase_interp_fig(results)
+                        if fig_exponential_only is not None:
+                            st.subheader("Time–Fluorescence: Exponential increase only (by concentration)")
+                            st.caption("Interpolated curves up to plateau, exponential section (0 ≤ t ≤ 3τ) only. Same design as Time-Fluorescence Interpolated Curves.")
+                            st.plotly_chart(fig_exponential_only, use_container_width=True)
                         
                         # 모든 농도 요약 테이블
                         st.subheader("Summary of All Concentration Normalization")
@@ -2286,7 +2626,10 @@ def data_load_mode(st):
                             yaxis_title='Initial Velocity v₀ (Fluorescence Units / Time)',
                             template='plotly_white',
                             height=600,
-                            hovermode='x unified'
+                            hovermode='x unified',
+                            xaxis=dict(showline=True, mirror=True, ticks='outside'),
+                            yaxis=dict(showline=True, mirror=True, ticks='outside'),
+                            legend=dict(orientation='v', x=0.02, y=0.98, xanchor='left', yanchor='top', bgcolor='rgba(255,255,255,0.85)')
                         )
                     else:
                         st.subheader("v₀ vs [E] Linear Fit (Constant Substrate)")
@@ -2346,7 +2689,10 @@ def data_load_mode(st):
                             yaxis_title='Initial Velocity v₀ (Fluorescence Units / Time)',
                             template='plotly_white',
                             height=600,
-                            hovermode='x unified'
+                            hovermode='x unified',
+                            xaxis=dict(showline=True, mirror=True, ticks='outside'),
+                            yaxis=dict(showline=True, mirror=True, ticks='outside'),
+                            legend=dict(orientation='v', x=0.02, y=0.98, xanchor='left', yanchor='top', bgcolor='rgba(255,255,255,0.85)')
                         )
                     
                     st.plotly_chart(fig_v0, use_container_width=True)
@@ -2356,40 +2702,25 @@ def data_load_mode(st):
             # 마지막에서 두 번째 탭: 데이터 테이블
             data_tab_idx = 3 if exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)" else 3
             if selected_tab == tab_titles[data_tab_idx]:
-                st.subheader("Detailed Parameters")
-                
-                # 상세 파라미터 테이블 (정규화 기반 v0 사용)
-                # 정규화 결과에서 v0 가져오기
+                # 상세 파라미터 테이블용 데이터 먼저 구성 (엑셀 버튼·테이블 공용)
+                detail_df = None
+                available_cols = []
                 if 'normalization_results' in results and results['normalization_results']:
                     norm_results = results['normalization_results']
-                    
-                    # 정규화 기반 v0으로 업데이트된 데이터프레임 생성
                     detail_data = []
                     for conc_name in sorted(norm_results.keys(), key=lambda x: norm_results[x]['concentration']):
                         norm_data = norm_results[conc_name]
                         conc_value = norm_data['concentration']
-                        
-                        # 정규화 기반 v0 계산
                         v0_norm = norm_data.get('v0', 0)
                         if v0_norm == 0 and norm_data.get('k_obs') is not None:
                             v0_norm = norm_data['k_obs'] * (norm_data['Fmax'] - norm_data['F0'])
-                        
-                        # 실험 타입에 따라 농도 단위 결정
                         if exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)":
                             conc_col_name = 'Concentration [μM]'
                         else:
                             conc_col_name = 'Concentration [ug/mL]'
-                        
-                        # mm_results에서 해당 농도 찾기
-                        mm_data = None
-                        for mm_conc_name, mm_params in results.get('mm_results', {}).items():
-                            if mm_params.get('concentration') == conc_value:
-                                mm_data = mm_params
-                                break
-                        
                         row_data = {
                             conc_col_name: conc_value,
-                            'v0': v0_norm,  # 정규화 기반 v0
+                            'v0': v0_norm,
                             'F0': norm_data['F0'],
                             'Fmax': norm_data['Fmax'],
                             'R_squared': norm_data['R_squared'],
@@ -2397,15 +2728,177 @@ def data_load_mode(st):
                             'τ': norm_data.get('tau', None),
                             'Equation': norm_data['equation']
                         }
-                        
                         detail_data.append(row_data)
-                    
                     detail_df = pd.DataFrame(detail_data)
-                    st.dataframe(detail_df, use_container_width=True, hide_index=True)
+                    download_df = detail_df
                 else:
-                    # 정규화 결과가 없으면 기존 방식 사용
                     detail_cols = ['Concentration [μM]', 'Concentration [ug/mL]', 'v0', 'F0', 'Fmax', 'R_squared', 'Equation']
                     available_cols = [col for col in detail_cols if col in results['mm_results_df'].columns]
+                    download_df = results['mm_results_df'][available_cols]
+
+                # 엑셀 생성 및 Detailed Parameters 위에 다운로드 버튼 1개만 표시
+                try:
+                    from io import BytesIO
+                    output = BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        raw_data = results.get('raw_data', {})
+                        _exp_type = results.get('mm_fit_results', {}).get('experiment_type', 'Substrate Concentration Variation (Standard Michaelis-Menten)')
+                        conc_unit = "μM" if _exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)" else "μg/mL"
+                        exp_rows = []
+                        if raw_data:
+                            _norm_results = results.get('normalization_results') or {}
+                            mm_results_df = results.get('mm_results_df', pd.DataFrame())
+                            def _conc_sort_key(c):
+                                if _norm_results and c in _norm_results:
+                                    return _norm_results[c]['concentration']
+                                for _, row in mm_results_df.iterrows():
+                                    if str(row.get('Concentration', '')) == str(c):
+                                        return row.get('Concentration [μM]', row.get('Concentration [ug/mL]', 0))
+                                try:
+                                    return float(c)
+                                except (ValueError, TypeError):
+                                    return 0
+                            conc_order = sorted(raw_data.keys(), key=_conc_sort_key)
+                            for conc_name in conc_order:
+                                data = raw_data[conc_name]
+                                conc_val = None
+                                if _norm_results and conc_name in _norm_results:
+                                    conc_val = _norm_results[conc_name].get('concentration')
+                                if conc_val is None and not mm_results_df.empty:
+                                    for _, row in mm_results_df.iterrows():
+                                        if str(row.get('Concentration', '')) == str(conc_name):
+                                            conc_val = row.get('Concentration [μM]', row.get('Concentration [ug/mL]'))
+                                            break
+                                if conc_val is None:
+                                    try:
+                                        conc_val = float(conc_name)
+                                    except (ValueError, TypeError):
+                                        conc_val = conc_name
+                                conc_display = f"{conc_val} {conc_unit}" if isinstance(conc_val, (int, float)) else str(conc_name)
+                                for t, v in zip(data['time'], data['value']):
+                                    exp_rows.append({'Concentration': conc_display, 'Time_min': t, 'RFU': v})
+                            if exp_rows:
+                                pd.DataFrame(exp_rows).to_excel(writer, sheet_name='Experimental data', index=False)
+                            else:
+                                pd.DataFrame(columns=['Concentration', 'Time_min', 'RFU']).to_excel(writer, sheet_name='Experimental data', index=False)
+                        else:
+                            pd.DataFrame(columns=['Concentration', 'Time_min', 'RFU']).to_excel(writer, sheet_name='Experimental data', index=False)
+                        interp_df_copy = results['interp_df'].copy()
+                        conc_col = 'Concentration [μM]' if 'Concentration [μM]' in interp_df_copy.columns else ('Concentration [ug/mL]' if 'Concentration [ug/mL]' in interp_df_copy.columns else ('Concentration' if 'Concentration' in interp_df_copy.columns else None))
+                        if conc_col is not None and 'Time_min' in interp_df_copy.columns and 'RFU_Interpolated' in interp_df_copy.columns:
+                            conc_order_interp = interp_df_copy.groupby(conc_col, sort=False).first().reset_index()[conc_col].tolist()
+                            try:
+                                conc_order_interp = sorted(conc_order_interp, key=lambda x: float(x) if isinstance(x, (int, float)) or (isinstance(x, str) and x.replace('.', '').replace('-', '').isdigit()) else 0)
+                            except Exception:
+                                pass
+                            wide_cols = []
+                            wide_data = []
+                            for idx, c in enumerate(conc_order_interp):
+                                sub = interp_df_copy[interp_df_copy[conc_col] == c].sort_values('Time_min').reset_index(drop=True)
+                                for i in range(len(sub)):
+                                    if i >= len(wide_data):
+                                        wide_data.append({})
+                                    wide_data[i][f'concentration_{idx}'] = sub.iloc[i][conc_col]
+                                    wide_data[i][f'time_min_{idx}'] = sub.iloc[i]['Time_min']
+                                    wide_data[i][f'rfu_interpolated_{idx}'] = sub.iloc[i]['RFU_Interpolated']
+                                wide_cols.extend([f'concentration_{idx}', f'time_min_{idx}', f'rfu_interpolated_{idx}'])
+                            if wide_data and wide_cols:
+                                mm_wide_df = pd.DataFrame(wide_data)[wide_cols]
+                                n_blocks = len(wide_cols) // 3
+                                mm_wide_df.columns = ['concentration', 'time_min', 'rfu_interpolated'] * n_blocks
+                            else:
+                                mm_wide_df = interp_df_copy
+                        else:
+                            mm_wide_df = interp_df_copy
+                        mm_wide_df.to_excel(writer, sheet_name='Time–FLU Interpolated curves', index=False)
+                        if 'normalization_results' in results and results['normalization_results']:
+                            norm_results = results['normalization_results']
+                            norm_summary_data = []
+                            for conc_name in sorted(norm_results.keys(), key=lambda x: norm_results[x]['concentration']):
+                                n_data = norm_results[conc_name]
+                                conc_value = n_data['concentration']
+                                v0_conc = n_data.get('v0', 0)
+                                if v0_conc == 0 and n_data.get('k_obs') is not None:
+                                    v0_conc = n_data['k_obs'] * (n_data['Fmax'] - n_data['F0'])
+                                if _exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)":
+                                    conc_display = f"{conc_value} μM"
+                                else:
+                                    conc_display = f"{conc_value} μg/mL"
+                                norm_summary_data.append({
+                                    'Concentration': conc_display,
+                                    'F0': n_data['F0'],
+                                    'F_max': n_data['Fmax'],
+                                    'k_obs': n_data.get('k_obs', None),
+                                    'τ': n_data.get('tau', None),
+                                    'v0 (RFU/min)': v0_conc,
+                                    'R²': n_data['R_squared'],
+                                    'Equation': n_data['equation']
+                                })
+                            if norm_summary_data:
+                                norm_summary_df = pd.DataFrame(norm_summary_data)
+                                norm_summary_df.to_excel(writer, sheet_name='Normalization results', index=False)
+                        if 'mm_fit_results' in results and results['mm_fit_results'].get('fit_success'):
+                            mm_fit = results['mm_fit_results']
+                            if _exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)":
+                                mm_fit_data = {
+                                    'Parameter': ['Vmax', 'Km (μM)', 'kcat', 'R²', 'Equation'],
+                                    'Value': [
+                                        mm_fit['Vmax'] if mm_fit['Vmax'] is not None else "N/A",
+                                        mm_fit['Km'] if mm_fit['Km'] is not None else "N/A",
+                                        mm_fit['kcat'] if mm_fit['kcat'] is not None else "N/A",
+                                        mm_fit['R_squared'],
+                                        mm_fit.get('equation', 'N/A')
+                                    ]
+                                }
+                            else:
+                                mm_fit_data = {
+                                    'Parameter': ['Slope', 'Intercept', 'R²', 'Equation'],
+                                    'Value': [
+                                        mm_fit.get('slope', None),
+                                        mm_fit.get('intercept', None),
+                                        mm_fit['R_squared'],
+                                        mm_fit.get('equation', 'N/A')
+                                    ]
+                                }
+                            mm_fit_df = pd.DataFrame(mm_fit_data)
+                            mm_fit_df.to_excel(writer, sheet_name='Fit results', index=False)
+                        download_df.to_excel(writer, sheet_name='Model simulation input', index=False)
+                    output.seek(0)
+                    xlsx_data = output.getvalue()
+                    uploaded_filename = results.get('uploaded_filename') or (uploaded_file.name if uploaded_file is not None else '')
+                    uploaded_filename = os.path.basename(str(uploaded_filename).strip())
+                    if uploaded_filename:
+                        base = uploaded_filename.rsplit('.', 1)[0]
+                        if base.startswith('raw_'):
+                            base = base[4:]
+                        xlsx_download_name = 'results_' + base + '.xlsx'
+                    else:
+                        if _exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)":
+                            base = "substrate_sample"
+                        else:
+                            base = "enzyme_sample"
+                        xlsx_download_name = 'results_' + base + '.xlsx'
+                    try:
+                        with open('Michaelis-Menten_calibration_results.xlsx', 'wb') as f:
+                            f.write(xlsx_data)
+                    except Exception as save_err:
+                        st.sidebar.warning(f"⚠️ XLSX auto-save failed: {save_err}")
+                    st.download_button(
+                        label="📥 Download All Results (XLSX)",
+                        data=xlsx_data,
+                        file_name=xlsx_download_name,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        help="Full Excel: Experimental data, Time–FLU Interpolated curves, Normalization results, Fit results, Model simulation input.",
+                        key="data_tab_xlsx_download"
+                    )
+                except Exception as e:
+                    st.warning(f"Error preparing XLSX download: {e}")
+
+                st.subheader("Detailed Parameters")
+                if detail_df is not None:
+                    st.dataframe(detail_df, use_container_width=True, hide_index=True)
+                else:
                     st.dataframe(results['mm_results_df'][available_cols], use_container_width=True, hide_index=True)
                 
                 # MM Fit 결과 표시
@@ -2436,275 +2929,80 @@ def data_load_mode(st):
                     st.dataframe(mm_fit_df, use_container_width=True, hide_index=True)
                 else:
                     st.warning("No Michaelis-Menten fit results available.")
-                
-                # 파일 다운로드 버튼
-                st.markdown("---")
-                col1, col2 = st.columns(2)
-                
-                # 다운로드용 데이터프레임 결정
-                if 'normalization_results' in results and results['normalization_results']:
-                    download_df = detail_df  # 정규화 결과 포함
-                else:
-                    detail_cols = ['Concentration [μM]', 'Concentration [ug/mL]', 'v0', 'F0', 'Fmax', 'R_squared', 'linear_fraction', 'Equation']
-                    available_cols = [col for col in detail_cols if col in results['mm_results_df'].columns]
-                    download_df = results['mm_results_df'][available_cols]
-                
-                # XLSX 다운로드 버튼 및 자동 저장
-                with col1:
-                    try:
-                        from io import BytesIO
-                        output = BytesIO()
-                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                            # 1) 첫 번째 시트: Experimental data (원본 raw 데이터)
-                            raw_data = results.get('raw_data', {})
-                            exp_type = results.get('mm_fit_results', {}).get('experiment_type', 'Substrate Concentration Variation (Standard Michaelis-Menten)')
-                            conc_unit = "μM" if exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)" else "μg/mL"
-                            exp_rows = []
-                            if raw_data:
-                                norm_results = results.get('normalization_results') or {}
-                                mm_results_df = results.get('mm_results_df', pd.DataFrame())
-                                def _conc_sort_key(c):
-                                    if norm_results and c in norm_results:
-                                        return norm_results[c]['concentration']
-                                    for _, row in mm_results_df.iterrows():
-                                        if str(row.get('Concentration', '')) == str(c):
-                                            return row.get('Concentration [μM]', row.get('Concentration [ug/mL]', 0))
-                                    try:
-                                        return float(c)
-                                    except (ValueError, TypeError):
-                                        return 0
-                                conc_order = sorted(raw_data.keys(), key=_conc_sort_key)
-                                for conc_name in conc_order:
-                                    data = raw_data[conc_name]
-                                    conc_val = None
-                                    if norm_results and conc_name in norm_results:
-                                        conc_val = norm_results[conc_name].get('concentration')
-                                    if conc_val is None and not mm_results_df.empty:
-                                        for _, row in mm_results_df.iterrows():
-                                            if str(row.get('Concentration', '')) == str(conc_name):
-                                                conc_val = row.get('Concentration [μM]', row.get('Concentration [ug/mL]'))
-                                                break
-                                    if conc_val is None:
-                                        try:
-                                            conc_val = float(conc_name)
-                                        except (ValueError, TypeError):
-                                            conc_val = conc_name
-                                    conc_display = f"{conc_val} {conc_unit}" if isinstance(conc_val, (int, float)) else str(conc_name)
-                                    for t, v in zip(data['time'], data['value']):
-                                        exp_rows.append({'Concentration': conc_display, 'Time_min': t, 'RFU': v})
-                                if exp_rows:
-                                    pd.DataFrame(exp_rows).to_excel(writer, sheet_name='Experimental data', index=False)
-                                else:
-                                    pd.DataFrame(columns=['Concentration', 'Time_min', 'RFU']).to_excel(writer, sheet_name='Experimental data', index=False)
-                            else:
-                                pd.DataFrame(columns=['Concentration', 'Time_min', 'RFU']).to_excel(writer, sheet_name='Experimental data', index=False)
-                            
-                            # 2) 두 번째 시트: Michaelis-Menten curves (농도별로 concentration, time_min, rfu_interpolated 오른쪽으로 반복)
-                            interp_df_copy = results['interp_df'].copy()
-                            conc_col = 'Concentration [μM]' if 'Concentration [μM]' in interp_df_copy.columns else ('Concentration [ug/mL]' if 'Concentration [ug/mL]' in interp_df_copy.columns else ('Concentration' if 'Concentration' in interp_df_copy.columns else None))
-                            if conc_col is not None and 'Time_min' in interp_df_copy.columns and 'RFU_Interpolated' in interp_df_copy.columns:
-                                conc_order_interp = interp_df_copy.groupby(conc_col, sort=False).first().reset_index()[conc_col].tolist()
-                                try:
-                                    conc_order_interp = sorted(conc_order_interp, key=lambda x: float(x) if isinstance(x, (int, float)) or (isinstance(x, str) and x.replace('.', '').replace('-', '').isdigit()) else 0)
-                                except Exception:
-                                    pass
-                                wide_cols = []
-                                wide_data = []
-                                for idx, c in enumerate(conc_order_interp):
-                                    sub = interp_df_copy[interp_df_copy[conc_col] == c].sort_values('Time_min').reset_index(drop=True)
-                                    for i in range(len(sub)):
-                                        if i >= len(wide_data):
-                                            wide_data.append({})
-                                        wide_data[i][f'concentration_{idx}'] = sub.iloc[i][conc_col]
-                                        wide_data[i][f'time_min_{idx}'] = sub.iloc[i]['Time_min']
-                                        wide_data[i][f'rfu_interpolated_{idx}'] = sub.iloc[i]['RFU_Interpolated']
-                                    wide_cols.extend([f'concentration_{idx}', f'time_min_{idx}', f'rfu_interpolated_{idx}'])
-                                if wide_data and wide_cols:
-                                    mm_wide_df = pd.DataFrame(wide_data)[wide_cols]
-                                    n_blocks = len(wide_cols) // 3
-                                    mm_wide_df.columns = ['concentration', 'time_min', 'rfu_interpolated'] * n_blocks
-                                else:
-                                    mm_wide_df = interp_df_copy
-                            else:
-                                mm_wide_df = interp_df_copy
-                            mm_wide_df.to_excel(writer, sheet_name='Time–FLU Interpolated curves', index=False)
-                            
-                            # 3) 세 번째 시트: Normalization results (기존 유지, F₀ → F0)
-                            if 'normalization_results' in results and results['normalization_results']:
-                                norm_results = results['normalization_results']
-                                norm_summary_data = []
-                                for conc_name in sorted(norm_results.keys(), key=lambda x: norm_results[x]['concentration']):
-                                    n_data = norm_results[conc_name]
-                                    conc_value = n_data['concentration']
-                                    v0_conc = n_data.get('v0', 0)
-                                    if v0_conc == 0 and n_data.get('k_obs') is not None:
-                                        v0_conc = n_data['k_obs'] * (n_data['Fmax'] - n_data['F0'])
-                                    
-                                    if exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)":
-                                        conc_display = f"{conc_value} μM"
-                                    else:
-                                        conc_display = f"{conc_value} μg/mL"
-                                    
-                                    norm_summary_data.append({
-                                        'Concentration': conc_display,
-                                        'F0': n_data['F0'],
-                                        'F_max': n_data['Fmax'],
-                                        'k_obs': n_data.get('k_obs', None),
-                                        'τ': n_data.get('tau', None),
-                                        'v0 (RFU/min)': v0_conc,
-                                        'R²': n_data['R_squared'],
-                                        'Equation': n_data['equation']
-                                    })
-                                
-                                if norm_summary_data:
-                                    norm_summary_df = pd.DataFrame(norm_summary_data)
-                                    norm_summary_df.to_excel(writer, sheet_name='Normalization results', index=False)
-                            
-                            # 4) 네 번째 시트: Fit results (기존 그대로)
-                            if 'mm_fit_results' in results and results['mm_fit_results'].get('fit_success'):
-                                mm_fit = results['mm_fit_results']
-                                if exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)":
-                                    mm_fit_data = {
-                                        'Parameter': ['Vmax', 'Km (μM)', 'kcat', 'R²', 'Equation'],
-                                        'Value': [
-                                            mm_fit['Vmax'] if mm_fit['Vmax'] is not None else "N/A",
-                                            mm_fit['Km'] if mm_fit['Km'] is not None else "N/A",
-                                            mm_fit['kcat'] if mm_fit['kcat'] is not None else "N/A",
-                                            mm_fit['R_squared'],
-                                            mm_fit.get('equation', 'N/A')
-                                        ]
-                                    }
-                                else:
-                                    mm_fit_data = {
-                                        'Parameter': ['Slope', 'Intercept', 'R²', 'Equation'],
-                                        'Value': [
-                                            mm_fit.get('slope', None),
-                                            mm_fit.get('intercept', None),
-                                            mm_fit['R_squared'],
-                                            mm_fit.get('equation', 'N/A')
-                                        ]
-                                    }
-                                mm_fit_df = pd.DataFrame(mm_fit_data)
-                                mm_fit_df.to_excel(writer, sheet_name='Fit results', index=False)
-                            
-                            # Model simulation 모드용 시트 (F0, Fmax, v0 등 파라미터)
-                            download_df.to_excel(writer, sheet_name='Model simulation input', index=False)
-                        
-                        output.seek(0)
-                        xlsx_data = output.getvalue()
-                        
-                        # 다운로드/저장 파일명: 업로드 파일명에 맞춤 (있으면 results_<원본이름>.xlsx, 없으면 샘플 파일명 기준)
-                        uploaded_filename = results.get('uploaded_filename') or (uploaded_file.name if uploaded_file is not None else '')
-                        uploaded_filename = os.path.basename(str(uploaded_filename).strip())
-                        if uploaded_filename:
-                            base = uploaded_filename.rsplit('.', 1)[0]
-                            if base.startswith('raw_'):
-                                base = base[4:]  # raw_ 제거
-                            xlsx_download_name = 'results_' + base + '.xlsx'
-                        else:
-                            exp_type = results.get('mm_fit_results', {}).get('experiment_type', 'Substrate Concentration Variation (Standard Michaelis-Menten)')
-                            if exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)":
-                                base = "substrate_sample"  # raw_substrate_sample.xlsx 기준
-                            else:
-                                base = "enzyme_sample"     # raw_enzyme_sample.xlsx 기준
-                            xlsx_download_name = 'results_' + base + '.xlsx'
-                        
-                        # XLSX 파일 자동 저장 (Model simulation 모드에서 자동 로드용, 고정 파일명)
-                        try:
-                            with open('Michaelis-Menten_calibration_results.xlsx', 'wb') as f:
-                                f.write(xlsx_data)
-                        except Exception as save_err:
-                            st.sidebar.warning(f"⚠️ XLSX auto-save failed: {save_err}")
-                        
-                        st.download_button(
-                            label="📥 Download All Results (XLSX)",
-                            data=xlsx_data,
-                            file_name=xlsx_download_name,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True,
-                            help="Full Excel: Experimental data, Time–FLU Interpolated curves, Normalization results, Fit results, Model simulation input."
-                        )
-                    except Exception as e:
-                        st.warning(f"Error preparing XLSX download: {e}")
-                
-                # 오른쪽 컬럼은 Export Plots 탭 안내만 표시
-                with col2:
-                    st.info(
-                        "이미지 내보내기는 상단 탭의 **📤 Export Plots**에서 이용할 수 있습니다. "
-                        "각 플롯을 미리 보고 PNG로 저장하거나, 모든 플롯을 ZIP으로 한 번에 저장할 수 있습니다."
-                    )
 
             # 마지막 탭: Export Plots
             export_tab_idx = 4
             if selected_tab == tab_titles[export_tab_idx]:
                 st.subheader("📤 Export Plots")
                 
-                st.markdown(
-                    """
-                    이 탭에서는 분석에서 생성된 모든 플롯을 한 번에 미리 보고,  
-                    각 플롯을 개별 PNG로 저장하거나, 모든 플롯을 ZIP 파일로 저장할 수 있습니다.
-                    """
+                # 상단 오른쪽에 ZIP 다운로드 버튼(또는 렌더링 상태) 표시용 플레이스홀더
+                _export_top_col1, _export_top_col2 = st.columns([3, 1])
+                with _export_top_col2:
+                    _zip_button_placeholder = st.empty()
+
+                st.info(
+                    "생성된 플롯을 미리보기할 수 있으며, 개별 PNG 저장 또는 모든 플롯을 ZIP 파일로 한 번에 저장할 수 있습니다."
                 )
 
                 try:
                     import zipfile
-                    import tempfile
                     from io import BytesIO
-
-                    _export_png_width, _export_png_height = 800, 600
-
-                    def _export_fig_to_png_bytes(fig):
-                        """지정 비율로 PNG 바이트 반환. 실패 시 None."""
-                        fig = go.Figure(fig)
-                        fig.update_layout(width=_export_png_width, height=_export_png_height)
-                        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-                        fpath = tmp.name
-                        tmp.close()
-                        try:
-                            try:
-                                fig.write_image(fpath, format="png", scale=2, engine="kaleido")
-                            except Exception:
-                                fig.write_image(fpath, format="png", scale=2)
-                            with open(fpath, "rb") as f:
-                                return f.read()
-                        except Exception:
-                            return None
-                        finally:
-                            if os.path.exists(fpath):
-                                try:
-                                    os.unlink(fpath)
-                                except OSError:
-                                    pass
 
                     # Export용 figure 리스트 생성
                     fig_list = _build_all_export_figures(results)
                     total_plots = len(fig_list)
 
-                    # 렌더링 진행 상태 표시용 프로그레스 바
-                    progress_placeholder = st.empty()
-                    if total_plots > 0:
-                        progress_bar = progress_placeholder.progress(
-                            0,
-                            text=f"0 / {total_plots} plots rendered"
-                        )
-                    else:
-                        progress_bar = None
+                    # 이전에 렌더링한 PNG 캐시가 있으면 재사용 (ZIP 클릭 등으로 재실행 시 재렌더링 방지)
+                    cache_version = st.session_state.get("export_cache_version")
+                    cache = st.session_state.get("export_plots_cache", {})
+                    names_now = tuple(n for n, _ in fig_list)
+                    cached_list = cache.get("export_results") or []
+                    use_cache = (
+                        cache.get("version") == cache_version
+                        and len(cached_list) == len(fig_list)
+                        and names_now == tuple(item["name"] for item in cached_list)
+                    )
 
-                    # PNG 바이트를 캐시하면서 개별 플롯 렌더링
-                    export_results = []  # [{'name': str, 'png_bytes': bytes or None}, ...]
+                    if use_cache:
+                        export_results = cached_list
+                        with _zip_button_placeholder.container():
+                            st.caption("✅ 캐시된 결과 사용 (재렌더링 없음)")
+                        progress_placeholder = st.empty()
+                        if total_plots > 0:
+                            progress_placeholder.progress(1, text=f"{total_plots} / {total_plots} plots rendered")
+                        progress_bar = None
+                    else:
+                        # 상단 오른쪽: 렌더링 중일 때 상태 표시
+                        with _zip_button_placeholder.container():
+                            st.caption("⏳ 플롯 렌더링 중...")
+                            st.caption("(완료 시 ZIP 다운로드 활성화)")
+
+                        progress_placeholder = st.empty()
+                        if total_plots > 0:
+                            progress_bar = progress_placeholder.progress(
+                                0,
+                                text=f"0 / {total_plots} plots rendered"
+                            )
+                        else:
+                            progress_bar = None
+
+                        export_results = []
 
                     st.markdown("### 개별 플롯 미리보기 및 저장")
                     for idx, (name, fig) in enumerate(fig_list):
                         st.markdown(f"**{idx + 1}. {name}**")
                         st.plotly_chart(fig, use_container_width=True)
 
-                        png_bytes = _export_fig_to_png_bytes(fig)
-                        export_results.append(
-                            {
-                                "name": name,
-                                "png_bytes": png_bytes,
-                            }
-                        )
+                        if use_cache:
+                            png_bytes = export_results[idx]["png_bytes"]
+                        else:
+                            png_bytes = _export_fig_to_png_bytes(fig, plot_name=name)
+                            export_results.append(
+                                {
+                                    "name": name,
+                                    "png_bytes": png_bytes,
+                                }
+                            )
 
                         if png_bytes:
                             st.download_button(
@@ -2716,10 +3014,13 @@ def data_load_mode(st):
                                 key=f"export_png_{idx}"
                             )
                         else:
-                            st.warning(f"PNG export failed for {name}. Check kaleido installation.")
+                            st.warning(
+                                f"PNG export failed for {name}. Install/upgrade kaleido and ensure Chrome is available: "
+                                "`pip install -U 'kaleido>=1.0.0'`. If using Kaleido 1.x, install Chrome or run `plotly_get_chrome`."
+                            )
 
-                        # 진행률 업데이트
-                        if progress_bar is not None and total_plots > 0:
+                        # 진행률 업데이트 (렌더링 중일 때만)
+                        if not use_cache and progress_bar is not None and total_plots > 0:
                             current = idx + 1
                             percent = int(current / total_plots * 100)
                             progress_bar.progress(
@@ -2728,6 +3029,13 @@ def data_load_mode(st):
                             )
 
                         st.markdown("---")
+
+                    # 렌더링을 새로 한 경우에만 캐시에 저장 (ZIP/개별 다운로드 시 재실행해도 재렌더링 안 하도록)
+                    if not use_cache and export_results:
+                        st.session_state["export_plots_cache"] = {
+                            "version": cache_version,
+                            "export_results": export_results,
+                        }
 
                     # 모든 플롯 렌더링 결과 집계
                     successful_exports = [item for item in export_results if item["png_bytes"] is not None]
@@ -2744,7 +3052,8 @@ def data_load_mode(st):
                         else:
                             st.info(
                                 "모든 플롯 PNG 변환에 실패했습니다. "
-                                "`pip install -U kaleido`로 kaleido를 설치한 후 앱을 다시 시작해 주세요."
+                                "`pip install -U 'kaleido>=1.0.0'` 후 앱을 재시작하세요. "
+                                "Kaleido 1.x는 Chrome/Chromium이 필요합니다. Chrome이 없으면 터미널에서 `plotly_get_chrome`을 실행하세요."
                             )
 
                     # 모든 플롯이 성공적으로 렌더링된 경우에만 ZIP 데이터 생성
@@ -2757,20 +3066,25 @@ def data_load_mode(st):
                         zip_buffer.seek(0)
                         zip_bytes = zip_buffer.getvalue()
 
-                    # 하단 우측에 "모든 플랏 다운로드" 버튼 배치
-                    st.markdown("### ")
-                    footer_col1, footer_col2 = st.columns([3, 1])
-                    with footer_col2:
-                        download_all_enabled = all_success and bool(zip_bytes)
-                        st.download_button(
-                            label="📥 Download ALL Plots (ZIP)",
-                            data=zip_bytes if download_all_enabled else b"",
-                            file_name="all_analysis_plots.zip",
-                            mime="application/zip",
-                            use_container_width=True,
-                            disabled=not download_all_enabled,
-                            key="export_all_plots_zip_download"
-                        )
+                    # 상단 오른쪽 플레이스홀더를 ZIP 버튼(또는 안내)으로 갱신
+                    download_all_enabled = all_success and bool(zip_bytes)
+                    _zip_button_placeholder.empty()
+                    with _zip_button_placeholder.container():
+                        if download_all_enabled:
+                            st.download_button(
+                                label="📥 Download ALL Plots (ZIP)",
+                                data=zip_bytes,
+                                file_name="all_analysis_plots.zip",
+                                mime="application/zip",
+                                use_container_width=True,
+                                key="export_all_plots_zip_download"
+                            )
+                        else:
+                            if total_plots == 0:
+                                st.caption("내보낼 플롯 없음")
+                            else:
+                                st.caption("⏳ 렌더링 완료 후 활성화")
+                                st.caption(f"({len(successful_exports)}/{total_plots} 성공)")
 
                 except Exception as export_err:
                     st.warning(f"Error in Export Plots tab: {export_err}")

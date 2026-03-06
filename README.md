@@ -1,5 +1,32 @@
 # Protease Simulator 3
 
+## 빠른 실행 (venv)
+
+이 프로젝트는 가상환경(venv) 사용을 권장합니다. 다른 프로젝트와 패키지 충돌을 피할 수 있습니다.
+
+**1. venv 활성화 (PowerShell)**
+
+```powershell
+cd c:\hyacinth1126\6-protease-simulator-3
+.\venv\Scripts\Activate.ps1
+```
+
+활성화되면 프롬프트 앞에 `(venv)`가 붙습니다.
+
+**2. 앱 실행 (Streamlit)**
+
+```powershell
+streamlit run app.py
+```
+
+브라우저에서 **http://localhost:8501** 로 접속합니다.
+
+**3. 종료**
+
+터미널에서 `deactivate` 입력 시 venv를 빠져나옵니다.
+
+---
+
 단백질 분해 효소(Protease) 반응 시뮬레이션 및 데이터 분석 도구입니다.
 
 ---

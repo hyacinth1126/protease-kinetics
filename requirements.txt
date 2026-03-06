@@ -1,15 +1,15 @@
-streamlit>=1.28.0
-pandas>=2.0.0
-numpy>=1.24.0
-matplotlib>=3.7.0
-seaborn>=0.12.0
-scipy>=1.10.0
+streamlit==1.55.0
+pandas==2.3.3
+numpy==1.26.4
+matplotlib==3.8.1
+seaborn==0.12.1
+scipy==1.15.3
 plotly==6.6.0
-kaleido>=0.2.0
-openpyxl>=3.0.0
-Pillow>=9.0.0
-opencv-python>=4.5.0
+# Kaleido 1.x fixes PNG export on Windows (0.2.x can freeze/fail). Kaleido 1.x requires Chrome/Chromium; run: plotly_get_chrome
+kaleido==1.2.0
+openpyxl==3.1.2
+Pillow==12.1.0
+opencv-python==4.11.0.86
 # Optional: OCR packages for legend text extraction
 # pytesseract>=0.3.10  # Requires Tesseract OCR to be installed separately
 # easyocr>=1.7.0  # Alternative OCR library
-

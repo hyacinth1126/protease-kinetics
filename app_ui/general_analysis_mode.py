@@ -65,8 +65,6 @@ def general_analysis_mode(st):
     """Model Simulation Mode - Standard FRET Analysis"""
     
     # Sidebar configuration
-    st.sidebar.title("⚙️ Settings")
-    
     enzyme_mw = st.sidebar.number_input(
         "Enzyme Molecular Weight (kDa)",
         min_value=1.0,
