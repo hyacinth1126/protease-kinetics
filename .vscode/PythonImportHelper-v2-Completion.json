@@ -691,6 +691,15 @@
         "documentation": {}
     },
     {
+        "label": "_playwright_install_tried",
+        "kind": 5,
+        "importPath": "app_ui.data_load_mode",
+        "description": "app_ui.data_load_mode",
+        "peekOfCode": "_playwright_install_tried = False\ndef _export_fig_to_png_via_playwright(fig, png_path, width=800, height=600):\n    \"\"\"Kaleido 실패 시 폴백: Plotly fig를 HTML로 저장 후 Playwright로 스크린샷. 성공 시 True.\"\"\"\n    global _playwright_install_tried\n    import subprocess\n    html_fd, html_path = tempfile.mkstemp(suffix=\".html\")\n    try:\n        os.close(html_fd)\n        fig.write_html(html_path, config={\"responsive\": True})\n        try:",
+        "detail": "app_ui.data_load_mode",
+        "documentation": {}
+    },
+    {
         "label": "render_footer",
         "kind": 2,
         "importPath": "app_ui.footer",

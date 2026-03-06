@@ -734,7 +734,7 @@ def _build_all_export_figures(results):
 
 
 def _ensure_kaleido_browser_path():
-    """서버 환경(Streamlit Cloud 등)에서 Chromium 경로를 지정. packages.txt로 chromium 설치 시 Kaleido가 인식하도록."""
+    """서버 환경에서 Chromium 경로를 지정해 Kaleido가 PNG 내보내기에 사용하도록 함."""
     if os.environ.get("BROWSER_PATH"):
         return
     if sys.platform.startswith("linux"):
@@ -744,8 +744,55 @@ def _ensure_kaleido_browser_path():
                 return
 
 
+_playwright_install_tried = False
+
+
+def _export_fig_to_png_via_playwright(fig, png_path, width=800, height=600):
+    """Kaleido 실패 시 폴백: Plotly fig를 HTML로 저장 후 Playwright로 스크린샷. 성공 시 True."""
+    global _playwright_install_tried
+    import subprocess
+    html_fd, html_path = tempfile.mkstemp(suffix=".html")
+    try:
+        os.close(html_fd)
+        fig.write_html(html_path, config={"responsive": True})
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            return False
+        try:
+            with sync_playwright() as p:
+                try:
+                    browser = p.chromium.launch(headless=True)
+                except Exception:
+                    if not _playwright_install_tried:
+                        _playwright_install_tried = True
+                        subprocess.run(
+                            [sys.executable, "-m", "playwright", "install", "chromium"],
+                            capture_output=True,
+                            timeout=120,
+                            check=False,
+                        )
+                    browser = p.chromium.launch(headless=True)
+                scale = 2
+                page = browser.new_page(viewport={"width": width * scale, "height": height * scale})
+                from urllib.request import pathname2url
+                file_url = "file://" + pathname2url(os.path.abspath(html_path))
+                page.goto(file_url, wait_until="networkidle", timeout=15000)
+                page.screenshot(path=png_path, full_page=False)
+                browser.close()
+        except Exception:
+            return False
+        return os.path.isfile(png_path)
+    finally:
+        if os.path.exists(html_path):
+            try:
+                os.unlink(html_path)
+            except OSError:
+                pass
+
+
 def _export_fig_to_png_bytes(fig, plot_name=None, width=800, height=600):
-    """지정 비율로 PNG 바이트 반환. 실패 시 None. Export 탭 및 Run 직후 ZIP 사전 렌더링에 공통 사용."""
+    """지정 비율로 PNG 바이트 반환. Kaleido 시도 후 실패 시 Playwright 폴백(Cloud 등). 실패 시 None."""
     _ensure_kaleido_browser_path()
     fig = go.Figure(fig)
     legend_kw = dict(bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)", borderwidth=0)
@@ -759,7 +806,6 @@ def _export_fig_to_png_bytes(fig, plot_name=None, width=800, height=600):
             xref="paper",
             yref="paper",
         )
-    # Normalized_Time_Fluorescence_exponential_curves는 figure에서 범례 위치 자동 설정됨 (데이터와 겹치지 않도록)
     fig.update_layout(
         width=width,
         height=height,
@@ -775,7 +821,13 @@ def _export_fig_to_png_bytes(fig, plot_name=None, width=800, height=600):
         try:
             fig.write_image(fpath, format="png", scale=2, engine="kaleido")
         except Exception:
-            fig.write_image(fpath, format="png", scale=2)
+            try:
+                fig.write_image(fpath, format="png", scale=2)
+            except Exception:
+                if _export_fig_to_png_via_playwright(fig, fpath, width=width, height=height):
+                    pass
+                else:
+                    raise
         with open(fpath, "rb") as f:
             return f.read()
     except Exception:
@@ -3095,8 +3147,7 @@ def data_load_mode(st):
                         else:
                             st.warning(
                                 f"PNG export failed for {name}. "
-                                "Kaleido 1.x needs Chrome/Chromium (e.g. run `plotly_get_chrome` or install Chrome locally). "
-                                "On Streamlit Cloud, PNG export may be unavailable; use a screenshot or run the app locally to download PNGs."
+                                "Install Chrome (or run `plotly_get_chrome` locally). On Cloud, use a screenshot or run the app locally to save PNGs."
                             )
 
                         # 진행률 업데이트 (렌더링 중일 때만)
@@ -3132,8 +3183,7 @@ def data_load_mode(st):
                         else:
                             st.info(
                                 "All plot PNG conversions failed. "
-                                "Kaleido 1.x requires Chrome/Chromium (e.g. run `plotly_get_chrome` or install Chrome locally). "
-                                "On Streamlit Cloud, use a screenshot or run the app locally to get PNGs."
+                                "Install Chrome or run `plotly_get_chrome` locally. On Cloud, use a screenshot or run the app locally to get PNGs."
                             )
 
                     # 모든 플롯이 성공적으로 렌더링된 경우에만 ZIP 데이터 생성
