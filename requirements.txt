@@ -1,5 +1,5 @@
 streamlit==1.55.0
-# Community Cloud 권장: protobuf 버전 제한 (미지정 시 충돌로 spawn error 유발 가능)
+# Community Cloud: pin protobuf to avoid spawn error from version conflict
 protobuf>=3.20,<6
 pandas==2.3.3
 numpy==1.26.4
@@ -7,7 +7,11 @@ matplotlib==3.8.1
 seaborn==0.12.1
 scipy==1.15.3
 plotly==6.6.0
+<<<<<<< Updated upstream
 # Kaleido 1.x: PNG export (로컬에서 Chrome 필요). 실패 시 Playwright 폴백 사용(Cloud 등)
+=======
+# Kaleido 1.x: PNG export on Windows (0.2.x can freeze). 1.x needs Chrome/Chromium; run: plotly_get_chrome
+>>>>>>> Stashed changes
 kaleido==1.2.0
 playwright>=1.40.0
 openpyxl==3.1.2
