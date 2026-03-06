@@ -479,31 +479,6 @@
         "documentation": {}
     },
     {
-        "label": "seaborn",
-        "kind": 6,
-        "isExtraImport": true,
-        "importPath": "seaborn",
-        "description": "seaborn",
-        "detail": "seaborn",
-        "documentation": {}
-    },
-    {
-        "label": "data_load_mode",
-        "importPath": "app_ui.data_load_mode",
-        "description": "app_ui.data_load_mode",
-        "isExtraImport": true,
-        "detail": "app_ui.data_load_mode",
-        "documentation": {}
-    },
-    {
-        "label": "general_analysis_mode",
-        "importPath": "app_ui.general_analysis_mode",
-        "description": "app_ui.general_analysis_mode",
-        "isExtraImport": true,
-        "detail": "app_ui.general_analysis_mode",
-        "documentation": {}
-    },
-    {
         "label": "render_footer",
         "importPath": "app_ui.footer",
         "description": "app_ui.footer",
@@ -1039,15 +1014,6 @@
         "importPath": "app",
         "description": "app",
         "peekOfCode": "def main():\n    \"\"\"Main Streamlit app\"\"\"\n    st.set_page_config(\n        page_title=\"Hydrogel FRET Advanced Analysis\",\n        page_icon=\"🔬\",\n        layout=\"wide\"\n    )\n    st.title(\"🔬  FRET Protease Simulation\")\n    st.markdown(\"---\")\n    # Mode selection",
-        "detail": "app",
-        "documentation": {}
-    },
-    {
-        "label": "plt.rcParams['font.family']",
-        "kind": 5,
-        "importPath": "app",
-        "description": "app",
-        "peekOfCode": "plt.rcParams['font.family'] = 'DejaVu Sans'\nsns.set_style(\"whitegrid\")\ndef main():\n    \"\"\"Main Streamlit app\"\"\"\n    st.set_page_config(\n        page_title=\"Hydrogel FRET Advanced Analysis\",\n        page_icon=\"🔬\",\n        layout=\"wide\"\n    )\n    st.title(\"🔬  FRET Protease Simulation\")",
         "detail": "app",
         "documentation": {}
     }

@@ -6,19 +6,15 @@
 Hydrogel FRET Advanced Kinetic Analysis - Streamlit Application
 """
 
-import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-# UI 모듈 import
-from app_ui.data_load_mode import data_load_mode
-from app_ui.general_analysis_mode import general_analysis_mode
 from app_ui.footer import render_footer
 
-# Configure plotting
-plt.rcParams['font.family'] = 'DejaVu Sans'
-sns.set_style("whitegrid")
+# 무거운 모듈은 각 모드 선택 시 로드 (Cloud spawn error 방지 + 실패 시 에러 메시지 확인 가능)
+def _configure_plotting():
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    plt.rcParams['font.family'] = 'DejaVu Sans'
+    sns.set_style("whitegrid")
 
 
 def main():
@@ -43,11 +39,25 @@ def main():
     
     # Data Load Mode
     if analysis_mode == "Data Load Mode":
-        data_load_mode(st)
+        try:
+            _configure_plotting()
+            from app_ui.data_load_mode import data_load_mode
+            data_load_mode(st)
+        except Exception as e:
+            st.error("Data Load Mode 로드 중 오류가 발생했습니다.")
+            st.code(str(e), language="text")
+            st.exception(e)
         return
     
     # Model Simulation Mode
-    general_analysis_mode(st)
+    try:
+        _configure_plotting()
+        from app_ui.general_analysis_mode import general_analysis_mode
+        general_analysis_mode(st)
+    except Exception as e:
+        st.error("Model Simulation Mode 로드 중 오류가 발생했습니다.")
+        st.code(str(e), language="text")
+        st.exception(e)
 
 
 if __name__ == "__main__":
