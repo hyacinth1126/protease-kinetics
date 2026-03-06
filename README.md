@@ -96,7 +96,7 @@ streamlit run app.py
   3. **의존성**  
      `requirements.txt`에 `protobuf>=3.20,<6` 제한이 있어야 합니다. (이미 추가됨)
   4. **Export plots 탭에서 PNG 다운로드**  
-     Kaleido(로컬에서는 Chrome 필요) 시도 후, 실패 시 **Playwright**가 자체 Chromium으로 PNG 생성합니다. Cloud에서는 루트의 `packages.txt`에 Playwright Chromium용 **시스템 라이브러리만** 넣어 두었으므로, 전체 `chromium` 패키지 없이도 동작합니다. 최초 1회 내보내기 시 Chromium 다운로드로 다소 지연될 수 있습니다.
+     로컬에서는 Kaleido(Chrome 설치 또는 `plotly_get_chrome`) 또는 Playwright 폴백으로 PNG 저장이 됩니다. **Streamlit Cloud**에서는 apt 의존성(`packages.txt`) 추가 시 빌드가 실패하는 이슈가 있어, Cloud에서는 PNG 내보내기가 되지 않을 수 있습니다. 필요한 경우 화면 캡처를 사용하거나 로컬에서 실행해 PNG를 받으세요.
 - 로컬에서는 `streamlit run app.py` 만 실행하면 됩니다.
 
 ---
