@@ -794,9 +794,16 @@ def _export_fig_to_png_via_playwright(fig, png_path, width=800, height=600):
                 pass
 
 
-def _export_fig_to_png_bytes(fig, plot_name=None, width=800, height=600):
-    """지정 비율로 PNG 바이트 반환. Kaleido 시도 후 실패 시 Playwright 폴백(Cloud 등). 실패 시 None."""
-    _ensure_kaleido_browser_path()
+# 로컬(Kaleido)과 배포(브라우저) PNG 서식 통일용: 동일한 크기·레이아웃 적용
+_EXPORT_PNG_WIDTH = 800
+_EXPORT_PNG_HEIGHT = 600
+_EXPORT_PNG_SCALE = 2
+
+
+def _apply_export_layout(fig, plot_name=None, width=None, height=None):
+    """로컬/배포 동일 서식 적용. width/height 미지정 시 _EXPORT_PNG_* 사용."""
+    w = width if width is not None else _EXPORT_PNG_WIDTH
+    h = height if height is not None else _EXPORT_PNG_HEIGHT
     fig = go.Figure(fig)
     legend_kw = dict(bgcolor="rgba(0,0,0,0)", bordercolor="rgba(0,0,0,0)", borderwidth=0)
     if plot_name == "Time_Fluorescence_Interpolated_Curves":
@@ -810,22 +817,29 @@ def _export_fig_to_png_bytes(fig, plot_name=None, width=800, height=600):
             yref="paper",
         )
     fig.update_layout(
-        width=width,
-        height=height,
+        width=w,
+        height=h,
         legend=legend_kw,
         title=dict(x=0.5, xanchor="center"),
     )
     fig.update_xaxes(showgrid=False, showline=True, mirror=True, ticks="outside", zeroline=False)
     fig.update_yaxes(showgrid=False, showline=True, mirror=True, ticks="outside", zeroline=False)
+    return fig
+
+
+def _export_fig_to_png_bytes(fig, plot_name=None, width=800, height=600):
+    """지정 비율로 PNG 바이트 반환. Kaleido 시도 후 실패 시 Playwright 폴백(Cloud 등). 실패 시 None."""
+    _ensure_kaleido_browser_path()
+    fig = _apply_export_layout(fig, plot_name=plot_name, width=width, height=height)
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     fpath = tmp.name
     tmp.close()
     try:
         try:
-            fig.write_image(fpath, format="png", scale=2, engine="kaleido")
+            fig.write_image(fpath, format="png", scale=_EXPORT_PNG_SCALE, engine="kaleido")
         except Exception:
             try:
-                fig.write_image(fpath, format="png", scale=2)
+                fig.write_image(fpath, format="png", scale=_EXPORT_PNG_SCALE)
             except Exception:
                 if _export_fig_to_png_via_playwright(fig, fpath, width=width, height=height):
                     pass
@@ -850,13 +864,16 @@ def _safe_png_filename(name: str) -> str:
     return s[:180] or "plot"
 
 
-def _render_client_side_png_download(fig, name: str, *, width=800, height=600, scale=2, iframe_height=720) -> None:
+def _render_client_side_png_download(fig, name: str, *, width=None, height=None, scale=None, iframe_height=720) -> None:
     """
     서버측 PNG 생성이 실패할 때 폴백.
-    iframe 내부에 figure를 렌더링하고, JS로 Plotly.downloadImage를 호출하는 버튼을 제공한다.
+    로컬(Kaleido)과 동일한 서식으로 브라우저에서 PNG 다운로드 (크기·레이아웃 통일).
     """
-    fig = go.Figure(fig)
-    div_id = f"plot_{abs(hash((name, width, height, scale))) % 10_000_000}"
+    w = width if width is not None else _EXPORT_PNG_WIDTH
+    h = height if height is not None else _EXPORT_PNG_HEIGHT
+    s = scale if scale is not None else _EXPORT_PNG_SCALE
+    fig = _apply_export_layout(fig, plot_name=name, width=w, height=h)
+    div_id = f"plot_{abs(hash((name, w, h, s))) % 10_000_000}"
     filename = _safe_png_filename(name)
     plot_html = pio.to_html(
         fig,
@@ -887,9 +904,9 @@ def _render_client_side_png_download(fig, name: str, *, width=800, height=600, s
       Plotly.downloadImage(gd, {{
         format: "png",
         filename: "{filename}",
-        width: {int(width)},
-        height: {int(height)},
-        scale: {int(scale)}
+        width: {int(w)},
+        height: {int(h)},
+        scale: {int(s)}
       }});
     }});
   }})();
@@ -898,19 +915,22 @@ def _render_client_side_png_download(fig, name: str, *, width=800, height=600, s
     components.html(html, height=iframe_height, scrolling=False)
 
 
-def _render_client_side_download_all(fig_list, *, width=900, height=650, scale=2, iframe_height=110) -> None:
+def _render_client_side_download_all(fig_list, *, width=None, height=None, scale=None, iframe_height=110) -> None:
     """
     Export 탭 상단(기존 ZIP 버튼 자리)용.
-    서버측 PNG 변환이 실패하는 환경(Cloud 등)에서 브라우저가 Plotly.downloadImage를 플롯별로 순차 실행하도록 버튼을 제공한다.
-
-    주의: 브라우저가 다중 다운로드를 차단할 수 있으며, 이 경우 사용자가 사이트별 "다중 파일 다운로드 허용"을 켜야 한다.
+    서버측 PNG 변환이 실패하는 환경(Cloud 등)에서 브라우저가 Plotly.downloadImage를 플롯별로 순차 실행.
+    로컬(Kaleido)과 동일한 서식(크기·레이아웃)으로 PNG 생성.
     """
     import json
 
-    # 최소 정보만 전달 (data/layout만)
+    w = width if width is not None else _EXPORT_PNG_WIDTH
+    h = height if height is not None else _EXPORT_PNG_HEIGHT
+    s = scale if scale is not None else _EXPORT_PNG_SCALE
+
+    # 로컬 export와 동일한 레이아웃 적용 후 payload 생성
     payload = []
     for name, fig in fig_list:
-        f = go.Figure(fig)
+        f = _apply_export_layout(fig, plot_name=name, width=w, height=h)
         pj = f.to_plotly_json()
         payload.append(
             {
@@ -960,14 +980,13 @@ def _render_client_side_download_all(fig_list, *, width=900, height=650, scale=2
           status.textContent = `다운로드 중... (${i+1}/${{figs.length}}) ${{item.name}}.png`;
           const div = document.createElement("div");
           scratch.appendChild(div);
-          // offscreen plot 생성
           await Plotly.newPlot(div, item.data, item.layout, {{displayModeBar: false, responsive: false}});
           await Plotly.downloadImage(div, {{
             format: "png",
             filename: item.name,
-            width: {int(width)},
-            height: {int(height)},
-            scale: {int(scale)}
+            width: {int(w)},
+            height: {int(h)},
+            scale: {int(s)}
           }});
           await Plotly.purge(div);
           div.remove();
@@ -3302,7 +3321,7 @@ def data_load_mode(st):
                             st.info(
                                 "서버에서 PNG 변환이 실패했습니다. 아래 버튼은 **브라우저에서 직접 PNG를 다운로드**합니다."
                             )
-                            _render_client_side_png_download(fig, name, width=900, height=650, scale=2, iframe_height=760)
+                            _render_client_side_png_download(fig, name, iframe_height=760)
 
                         # 진행률 업데이트 (렌더링 중일 때만)
                         if not use_cache and progress_bar is not None and total_plots > 0:
@@ -3342,8 +3361,6 @@ def data_load_mode(st):
 
                     # 모든 플롯이 성공적으로 렌더링된 경우에만 ZIP 데이터 생성
                     zip_bytes = b""
-                    zip_bytes_folder = b""
-                    folder_zip_name = "all_analysis_plots.zip"
                     if all_success:
                         uploaded_filename = os.path.basename(str(results.get("uploaded_filename") or "").strip())
                         base = ""
@@ -3359,16 +3376,6 @@ def data_load_mode(st):
                         zip_buffer.seek(0)
                         zip_bytes = zip_buffer.getvalue()
 
-                        # 동일한 PNG를 하나의 폴더 안에 넣은 ZIP (압축 해제 시 한 폴더에 순서대로 저장)
-                        folder_name = f"plots_{base}" if base else "analysis_plots"
-                        folder_zip_name = f"plots_folder_{base}.zip" if base else "analysis_plots_folder.zip"
-                        zip_buffer_folder = BytesIO()
-                        with zipfile.ZipFile(zip_buffer_folder, 'w', zipfile.ZIP_DEFLATED) as zf:
-                            for item in successful_exports:
-                                zf.writestr(f"{folder_name}/{item['name']}.png", item["png_bytes"])
-                        zip_buffer_folder.seek(0)
-                        zip_bytes_folder = zip_buffer_folder.getvalue()
-
                     # 상단 오른쪽 플레이스홀더를 ZIP 버튼(또는 안내)으로 갱신
                     download_all_enabled = all_success and bool(zip_bytes)
                     _zip_button_placeholder.empty()
@@ -3378,32 +3385,21 @@ def data_load_mode(st):
                             zip_download_name = "all_analysis_plots.zip"
                             if base:
                                 zip_download_name = f"plots_{base}.zip"
-                            _btn_col1, _btn_col2 = st.columns(2)
-                            with _btn_col1:
-                                st.download_button(
-                                    label="📥 Download ALL Plots (ZIP)",
-                                    data=zip_bytes,
-                                    file_name=zip_download_name,
-                                    mime="application/zip",
-                                    use_container_width=True,
-                                    key="export_all_plots_zip_download"
-                                )
-                            with _btn_col2:
-                                st.download_button(
-                                    label="💾 Save PNGs to folder (ZIP)",
-                                    data=zip_bytes_folder,
-                                    file_name=folder_zip_name,
-                                    mime="application/zip",
-                                    use_container_width=True,
-                                    key="export_all_plots_folder_zip_download"
-                                )
+                            st.download_button(
+                                label="📥 Download ALL Plots (ZIP)",
+                                data=zip_bytes,
+                                file_name=zip_download_name,
+                                mime="application/zip",
+                                use_container_width=True,
+                                key="export_all_plots_zip_download"
+                            )
                         else:
                             if total_plots == 0:
                                 st.caption("No plots to export")
                             else:
                                 # 서버 PNG가 일부/전체 실패한 경우: 브라우저에서 일괄 PNG 다운로드 버튼 제공
                                 st.caption(f"Server PNG: {len(successful_exports)}/{total_plots} successful")
-                                _render_client_side_download_all(fig_list, width=900, height=650, scale=2, iframe_height=120)
+                                _render_client_side_download_all(fig_list, iframe_height=120)
 
                 except Exception as export_err:
                     st.warning(f"Error in Export Plots tab: {export_err}")
