@@ -3300,10 +3300,9 @@ def data_load_mode(st):
                             progress_placeholder.progress(1, text=f"{total_plots} / {total_plots} plots rendered")
                         progress_bar = None
                     else:
-                        # 상단 오른쪽: 렌더링 중일 때 상태 표시 (서버 PNG 실패 시에는 준비 후 'Save All PNG' 버튼 표시)
+                        # 상단 오른쪽: 렌더링 중일 때 상태 표시
                         with _zip_button_placeholder.container():
                             st.caption("⏳ Rendering plots...")
-                            st.caption("(ZIP or Save All PNG will be available when complete)")
 
                         progress_placeholder = st.empty()
                         if total_plots > 0:
