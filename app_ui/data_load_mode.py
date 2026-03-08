@@ -3342,7 +3342,8 @@ def data_load_mode(st):
                                 key=f"export_png_{idx}"
                             )
                         else:
-                            _render_client_side_png_download(fig, name, iframe_height=760)
+                            # 서버 PNG 실패 시: 플롯만 표시, 개별 다운로드 버튼은 숨김 (상단 'Save All PNG'로 일괄 저장)
+                            st.plotly_chart(fig, use_container_width=True)
 
                         # 진행률 업데이트 (렌더링 중일 때만)
                         if not use_cache and progress_bar is not None and total_plots > 0:
