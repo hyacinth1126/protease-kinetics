@@ -949,7 +949,7 @@ def _render_client_side_download_all(fig_list, *, width=None, height=None, scale
     📥 Save All PNG
   </button>
 </div>
-<div id="{div_id}_status" style="text-align:right; font-size:12px; color: rgba(49,51,63,0.65); margin-top:6px;"></div>
+<div id="{div_id}_status" style="text-align:right; font-size:12px; color: rgba(49,51,63,0.65); margin-top:4px;"></div>
 <div id="{div_id}_scratch" style="width:0;height:0;overflow:hidden;"></div>
 <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
 <script>
@@ -3417,7 +3417,7 @@ def data_load_mode(st):
                                 st.caption("No plots to export")
                             else:
                                 # 서버 PNG 실패·브라우저 직접 다운로드 시에는 'Server PNG: 0/n successful' 캡션 없이 버튼만 표시
-                                _render_client_side_download_all(fig_list, iframe_height=120)
+                                _render_client_side_download_all(fig_list, iframe_height=56)
 
                 except Exception as export_err:
                     st.warning(f"Error in Export Plots tab: {export_err}")
