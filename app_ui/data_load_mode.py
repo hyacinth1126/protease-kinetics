@@ -3416,8 +3416,8 @@ def data_load_mode(st):
                             if total_plots == 0:
                                 st.caption("No plots to export")
                             else:
-                                st.caption("⏳ Enabled when rendering completes")
-                                st.caption(f"({len(successful_exports)}/{total_plots} successful)")
+                                # 서버 PNG 실패·브라우저 직접 다운로드 시에는 'Server PNG: 0/n successful' 캡션 없이 버튼만 표시
+                                _render_client_side_download_all(fig_list, iframe_height=80)
 
                 except Exception as export_err:
                     st.warning(f"Error in Export Plots tab: {export_err}")
