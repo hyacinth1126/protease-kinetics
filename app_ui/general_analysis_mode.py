@@ -364,7 +364,7 @@ def general_analysis_mode(st):
         if fitted_params_from_interp and len(fitted_params_from_interp) > 0:
             fitted_params = fitted_params_from_interp
             st.session_state['fitted_params'] = fitted_params
-            st.sidebar.success(f"✅ Interpolated 값에서 F0, Fmax 계산 완료 ({len(fitted_params)}개 농도)")
+            st.sidebar.success(f"✅ F0, Fmax computed from interpolated values ({len(fitted_params)} concentrations)")
 
     # 2순위: MM Results 시트에서 읽기 (exponential 식이나 interpolated 값이 없을 때만)
     if fitted_params is None or len(fitted_params) == 0:
@@ -424,7 +424,7 @@ def general_analysis_mode(st):
                             continue
                 
                 if len(fitted_params) > 0:
-                    st.sidebar.success(f"✅ {len(fitted_params)}개 농도 조건의 F0, Fmax 파라미터 로드 완료 (MM Results 시트)")
+                    st.sidebar.success(f"✅ F0, Fmax parameters loaded ({len(fitted_params)} concentrations, MM Results sheet)")
                     # Interpolated 값이 없을 때만 MM Results 사용
                     if 'fitted_params' not in st.session_state or len(st.session_state.get('fitted_params', {})) == 0:
                         st.session_state['fitted_params'] = fitted_params
@@ -480,7 +480,7 @@ def general_analysis_mode(st):
                                 'Km': to_float(km),
                                 'R_squared': to_float(r2),
                                 'fit_success': True,
-                                'experiment_type': "Substrate 농도 변화 (표준 MM)",
+                                'experiment_type': "Substrate Concentration Variation (Standard MM)",
                                 'equation': f"v₀ = {to_float(vmax):.2f}[S] / ({to_float(km):.2f} + [S])"
                             }
                         elif slope is not None:
@@ -489,7 +489,7 @@ def general_analysis_mode(st):
                                 'intercept': to_float(intercept) if intercept else 0,
                                 'R_squared': to_float(r2),
                                 'fit_success': True,
-                                'experiment_type': "Enzyme 농도 변화",
+                                'experiment_type': "Enzyme Concentration Variation",
                                 'equation': f"v₀ = {to_float(slope):.4f}[E] + {to_float(intercept) if intercept else 0:.4f}"
                             }
                     
@@ -543,11 +543,11 @@ def general_analysis_mode(st):
     # 원본 시간 범위 사용 (보간된 데이터가 아닌)
     original_time_max = st.session_state.get('original_time_max', df['time_s'].max())
     if time_unit == 'min':
-        time_display = f"0 - {original_time_max:.0f} 분"
-        time_label = "시간 (분)"
+        time_display = f"0 - {original_time_max:.0f} min"
+        time_label = "Time (min)"
     else:
-        time_display = f"0 - {original_time_max:.0f} 초" if original_time_max < 100 else f"0 - {original_time_max/60:.1f} 분"
-        time_label = "시간 (초)"
+        time_display = f"0 - {original_time_max:.0f} s" if original_time_max < 100 else f"0 - {original_time_max/60:.1f} min"
+        time_label = "Time (s)"
     # Determine concentration unit from normalized data
     # conc_col_name 컬럼이 있으면 사용, 없으면 enzyme_ugml 사용
     conc_col = 'enzyme_ugml'
@@ -567,7 +567,8 @@ def general_analysis_mode(st):
     original_conc_col = df['conc_col_name'].iloc[0] if 'conc_col_name' in df.columns else 'Concentration [ug/mL]'
     
     # 실험 타입이 Substrate 농도 변화면 무조건 μM
-    if experiment_type == "Substrate 농도 변화 (표준 MM)":
+    _substrate_std = ("Substrate 농도 변화 (표준 MM)", "Substrate Concentration Variation (Standard MM)")
+    if experiment_type in _substrate_std:
         conc_unit = "μM"
     elif 'uM' in original_conc_col or 'μM' in original_conc_col:
         conc_unit = "μM"
@@ -581,11 +582,11 @@ def general_analysis_mode(st):
     
     col1, col2 = st.columns(2)
     with col1:
-        # 중복 제거된 농도 조건 수 계산
+        # Number of unique concentration conditions
         unique_concs = sorted(df[conc_col].unique())
-        st.metric("농도 조건 수", len(unique_concs))
+        st.metric("Number of Concentration Conditions", len(unique_concs))
     with col2:
-        st.metric("시간 범위", time_display)
+        st.metric("Time Range", time_display)
     
     # Tabs for different views
     tab1, tab_alpha, tab2, tab_desc, tab3, tab4 = st.tabs([
@@ -719,7 +720,7 @@ def general_analysis_mode(st):
         # Plotting
         if v0_data and mm_fit:
             # Determine exp type
-            exp_type = mm_fit.get('experiment_type', 'Substrate 농도 변화 (표준 MM)')
+            exp_type = mm_fit.get('experiment_type', 'Substrate Concentration Variation (Standard MM)')
             
             fig_v0 = go.Figure()
             
@@ -738,7 +739,7 @@ def general_analysis_mode(st):
                 conc_max = max(v0_data['concentrations'])
                 conc_range = np.linspace(conc_min * 0.5, conc_max * 1.5, 200)
                 
-                if exp_type == "Substrate 농도 변화 (표준 MM)" and mm_fit.get('Vmax') is not None:
+                if exp_type in ("Substrate 농도 변화 (표준 MM)", "Substrate Concentration Variation (Standard MM)") and mm_fit.get('Vmax') is not None:
                      v0_fitted = michaelis_menten_calibration(conc_range, mm_fit['Vmax'], mm_fit['Km'])
                      line_name = mm_fit.get('equation', 'MM Fit')
                      
@@ -845,34 +846,34 @@ def general_analysis_mode(st):
             st.dataframe(df_table, use_container_width=True, hide_index=True)
                  
         else:
-            st.info("⚠️ Michaelis-Menten 피팅 데이터가 없습니다. Data Load 모드에서 분석을 수행하거나 결과 파일(Michaelis-Menten Fit Results 시트 포함)을 로드해주세요.")
+            st.info("⚠️ No Michaelis-Menten fitting data. Run analysis in Data Load Mode or load a result file that includes the 'Michaelis-Menten Fit Results' sheet.")
     
     with tab_alpha:
         st.subheader("📈 Alpha (α) Calculation")
         
         st.markdown("""
-        **알파(α)란?**  
-        정규화된 절단 비율로, 0 (절단 없음)에서 1 (완전 절단) 사이의 값을 가집니다.
+        **What is Alpha (α)?**
+        Normalized cleavage ratio, ranging from 0 (no cleavage) to 1 (full cleavage).
         
-        **계산식**: α(t) = (F(t) - F₀) / (Fmax - F₀)
-        - **F(t)**: 시간 t에서의 형광값
-          - Data Load 모드 결과 사용 시: 정규화를 통해 얻은 exponential 곡선의 interpolated 값 (RFU_Interpolated)
-          - 직접 계산 시: 원본 데이터의 형광값
-        - **F₀**: 초기 형광값
-          - Data Load 모드에서 계산된 값이 있으면: 정규화 exponential 곡선의 interpolated 값들에서 얻은 F0 값 (MM Results 시트)
-          - 없으면: 각 농도별 최소 형광값 (min(F))
-        - **Fmax**: 최대 형광값
-          - Data Load 모드에서 계산된 값이 있으면: 정규화 exponential 곡선의 interpolated 값들에서 얻은 Fmax 값 (MM Results 시트)
-          - 없으면: Region-based 정규화 방식 사용
-            1. Plateau 구간이 존재하면: Plateau 구간의 평균 형광값 (mean(F_plateau))
-            2. 지수 증가 구간이 충분하면 (≥3점): 지수 함수 피팅으로 F∞ 계산 (F(t) = F₀ + A·(1 - e^(-k·t))에서 Fmax = F₀ + A)
-            3. 그 외: 최대 형광값 (max(F))
+        **Formula**: α(t) = (F(t) - F₀) / (Fmax - F₀)
+        - **F(t)**: Fluorescence at time t
+          - With Data Load Mode results: interpolated values from the normalization exponential curve (RFU_Interpolated)
+          - Direct calculation: raw fluorescence from the data
+        - **F₀**: Initial fluorescence
+          - If available from Data Load Mode: F0 from interpolated values (MM Results sheet)
+          - Otherwise: minimum fluorescence per concentration (min(F))
+        - **Fmax**: Maximum fluorescence
+          - If available from Data Load Mode: Fmax from interpolated values (MM Results sheet)
+          - Otherwise: Region-based normalization
+            1. If a plateau region exists: mean fluorescence of the plateau (mean(F_plateau))
+            2. If sufficient exponential rise (≥3 points): F∞ from exponential fit (F(t) = F₀ + A·(1 - e^(-k·t)), Fmax = F₀ + A)
+            3. Otherwise: maximum fluorescence (max(F))
         """)
         
         # Check if alpha column exists
         if 'alpha' not in df.columns:
-            st.error("❌ Alpha 값이 계산되지 않았습니다. 데이터 정규화가 필요합니다.")
-            st.info("💡 데이터가 정규화되지 않았습니다. 데이터 로드 및 정규화 과정을 확인해주세요.")
+            st.error("❌ Alpha was not computed. Data normalization is required.")
+            st.info("💡 Data is not normalized. Please check the data load and normalization steps.")
         else:
             # Alpha vs Time Plot
             st.subheader("📊 Normalized Data: α(t) vs Time")
@@ -900,29 +901,29 @@ def general_analysis_mode(st):
                 for conc in sorted(df[conc_col].unique()):
                     subset = df[df[conc_col] == conc]
                     alpha_stats.append({
-                        f'농도 ({conc_unit})': conc,
-                        'Alpha 최소값': f"{subset['alpha'].min():.4f}",
-                        'Alpha 최대값': f"{subset['alpha'].max():.4f}",
-                        'Alpha 평균': f"{subset['alpha'].mean():.4f}",
-                        'Alpha 표준편차': f"{subset['alpha'].std():.4f}",
-                        '데이터 포인트 수': len(subset)
+                        f'Concentration ({conc_unit})': conc,
+                        'Alpha min': f"{subset['alpha'].min():.4f}",
+                        'Alpha max': f"{subset['alpha'].max():.4f}",
+                        'Alpha mean': f"{subset['alpha'].mean():.4f}",
+                        'Alpha std': f"{subset['alpha'].std():.4f}",
+                        'Data points': len(subset)
                     })
                 
                 st.dataframe(pd.DataFrame(alpha_stats), use_container_width=True, hide_index=True)
             
             # F0, Fmax 정보
-            st.subheader("🔬 정규화 파라미터 (F₀, Fmax)")
+            st.subheader("🔬 Normalization Parameters (F₀, Fmax)")
             
             # Check if fitted parameters are being used
             fitted_params_used = st.session_state.get('fitted_params', None)
             using_fitted_params = fitted_params_used is not None and len(fitted_params_used) > 0
             
             if using_fitted_params:
-                st.success(f"✅ F0, Fmax 파라미터 로드 완료 ({len(fitted_params_used)}개 농도 조건)")
-                st.info("💡 F0, Fmax 값은 Data Load 모드의 정규화 exponential 식에서 나온 상수 값입니다.")
-                st.info("📊 사용된 식: F(t) = F₀ + (Fmax - F₀)·[1 - exp(-k_obs·t)]")
+                st.success(f"✅ F0, Fmax parameters loaded ({len(fitted_params_used)} concentrations)")
+                st.info("💡 F0, Fmax are constants from the normalization exponential in Data Load Mode.")
+                st.info("📊 Formula used: F(t) = F₀ + (Fmax - F₀)·[1 - exp(-k_obs·t)]")
             else:
-                st.info("ℹ️ 기본 정규화 방식 사용 중 (Region-based 계산)")
+                st.info("ℹ️ Using default normalization (Region-based calculation)")
             
             # F0, Fmax 테이블
             if conc_col and 'F0' in df.columns and 'Fmax' in df.columns:
@@ -936,7 +937,7 @@ def general_analysis_mode(st):
                     df_Fmax = subset['Fmax'].iloc[0]
                     
                     # fitted_params에서 값 확인
-                    source_info = "Region-based 계산"
+                    source_info = "Region-based calculation"
                     if using_fitted_params and fitted_params_used:
                         # 농도 매칭 (부동소수점 오차 고려)
                         matched_conc = None
@@ -952,66 +953,62 @@ def general_analysis_mode(st):
                             # 값이 일치하는지 확인
                             if abs(df_F0 - fitted_F0) < 0.01 and abs(df_Fmax - fitted_Fmax) < 0.01:
                                 if fmax_method == 'fitted_from_data_load':
-                                    source_info = "정규화 exponential 식"
+                                    source_info = "Normalization exponential"
                                 else:
-                                    source_info = "정규화 exponential 식 (정규화 과정 사용)"
+                                    source_info = "Normalization exponential (from normalization step)"
                             else:
-                                source_info = f"정규화 과정 사용 (Exponential 식: F0={fitted_F0:.2f}, Fmax={fitted_Fmax:.2f})"
+                                source_info = f"From normalization (F0={fitted_F0:.2f}, Fmax={fitted_Fmax:.2f})"
                     
                     f0_fmax_data.append({
-                        f'농도 ({conc_unit})': conc,
-                        'F₀ (초기)': f"{df_F0:.2f}",
-                        'Fmax (최대)': f"{df_Fmax:.2f}",
-                        'Fmax 방법': fmax_method,
-                        '출처': source_info,
-                        'Alpha 범위': f"{subset['alpha'].min():.3f} - {subset['alpha'].max():.3f}"
+                        f'Concentration ({conc_unit})': conc,
+                        'F₀ (initial)': f"{df_F0:.2f}",
+                        'Fmax (max)': f"{df_Fmax:.2f}",
+                        'Fmax method': fmax_method,
+                        'Source': source_info,
+                        'Alpha range': f"{subset['alpha'].min():.3f} - {subset['alpha'].max():.3f}"
                     })
                 
                 st.dataframe(pd.DataFrame(f0_fmax_data), use_container_width=True, hide_index=True)
             
-            # 정규화 방법 설명
-            with st.expander("📖 정규화 방법 상세 설명", expanded=False):
+            # Normalization method description
+            with st.expander("📖 Normalization method details", expanded=False):
                 if using_fitted_params:
                     st.markdown("""
-                    **정규화 exponential 식에서 F0, Fmax 사용:**
-                    - F0, Fmax: Data Load 모드의 정규화 과정에서 얻은 exponential 식의 상수 값
-                    - **정규화 식**: F(t) = F₀ + (Fmax - F₀)·[1 - exp(-k_obs·t)]
-                      - F₀: 초기 형광값 (정규화 과정에서 계산)
-                      - Fmax: 최대 형광값 (정규화 과정에서 계산)
-                      - k_obs: 관찰된 반응 속도 상수
-                    - **알파 계산**: α(t) = (F(t) − F₀) / (Fmax − F₀)
-                    - Data Load 모드의 `normalize_iterative` 함수에서 반복 정규화를 통해 계산된 값 사용
+                    **Using F0, Fmax from normalization exponential:**
+                    - F0, Fmax: Constants from the normalization exponential in Data Load Mode
+                    - **Formula**: F(t) = F₀ + (Fmax - F₀)·[1 - exp(-k_obs·t)]
+                      - F₀: Initial fluorescence (from normalization)
+                      - Fmax: Maximum fluorescence (from normalization)
+                      - k_obs: Observed rate constant
+                    - **Alpha**: α(t) = (F(t) − F₀) / (Fmax − F₀)
+                    - Values from iterative normalization in Data Load Mode
                     """)
                 else:
                     st.markdown("""
-                    **기본 정규화 방식 (Region-based):**
+                    **Default normalization (Region-based):**
                     
-                    1. **임시 정규화 (Temporary Normalization)**
-                       - F0_temp = 최소 형광값 (min(F))
-                       - Fmax_temp = 최대 형광값 (max(F))
+                    1. **Temporary normalization**
+                       - F0_temp = min(F), Fmax_temp = max(F)
                        - α_temp = (F - F0_temp) / (Fmax_temp - F0_temp)
                     
-                    2. **구간 구분 (Region Division)**
-                       - 초기 선형 구간 (Initial Linear Region)
-                       - 지수 증가 구간 (Exponential Growth Region)
-                       - Plateau 구간 (Plateau Region)
+                    2. **Region division**
+                       - Initial linear region
+                       - Exponential growth region
+                       - Plateau region
                     
-                    3. **최종 정규화 (Final Normalization)**
-                       - F0 = F0_temp (최소값 유지)
-                       - Fmax 결정 방법:
-                         * Plateau 구간이 있으면 → Plateau 평균값
-                         * 지수 증가 구간이 충분하면 → 지수 피팅으로 F∞ 계산
-                         * 그 외 → 최대값 사용
+                    3. **Final normalization**
+                       - F0 = F0_temp
+                       - Fmax: plateau mean if available; else exponential fit for F∞; else max(F)
                        - α = (F - F0) / (Fmax - F0)
                     
-                    **Fmax 방법 설명:**
-                    - `plateau_avg`: Plateau 구간의 평균값 사용
-                    - `exponential_fit`: 지수 함수 피팅으로 계산된 F∞ 사용
-                    - `fallback_max`: 최대값 사용 (fallback)
+                    **Fmax methods:**
+                    - `plateau_avg`: Plateau mean
+                    - `exponential_fit`: F∞ from exponential fit
+                    - `fallback_max`: max(F) (fallback)
                     """)
             
-            # Alpha 데이터 다운로드
-            st.subheader("💾 Alpha 데이터 다운로드")
+            # Download Alpha data
+            st.subheader("💾 Download Alpha Data")
             
             # Alpha 데이터 준비
             alpha_download_df = df[['time_s', conc_col, 'alpha', 'F0', 'Fmax']].copy() if conc_col else df[['time_s', 'alpha', 'F0', 'Fmax']].copy()
@@ -1019,76 +1016,74 @@ def general_analysis_mode(st):
             
             csv_alpha = alpha_download_df.to_csv(index=False)
             st.download_button(
-                label="📥 Alpha 데이터 다운로드 (CSV)",
+                label="📥 Download Alpha Data (CSV)",
                 data=csv_alpha,
                 file_name="alpha_calculation_results.csv",
                 mime="text/csv",
-                help="시간, 농도, alpha, F0, Fmax 값을 포함한 CSV 파일"
+                help="CSV with time, concentration, alpha, F0, Fmax"
             )
     
     with tab2:
         st.subheader("🔬 Global Model Fitting")
         
         st.markdown("""
-        **기본 모델 (A-C)**: 고전적 효소 키네틱 메커니즘  
-        **확장 모델 (D-F)**: Fmax 농도 의존성 설명 (겔 침투, 생성물 억제, 효소 흡착)
+        **Basic models (A–C)**: Classical enzyme kinetics  
+        **Extended models (D–F)**: Fmax concentration dependence (gel penetration, product inhibition, enzyme adsorption)
         """)
         
         # Model selection
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown("**기본 모델**")
-            fit_model_a = st.checkbox("모델 A: 기질 고갈", value=True)
-            st.caption("✓ 1차 반응 및 기질 고갈")
+            st.markdown("**Basic models**")
+            fit_model_a = st.checkbox("Model A: Substrate Depletion", value=True)
+            st.caption("✓ First-order reaction & substrate depletion")
             
-            fit_model_b = st.checkbox("모델 B: 효소 비활성화", value=True)
-            st.caption("✓ 효소 비활성화 & 시간 의존")
+            fit_model_b = st.checkbox("Model B: Enzyme Deactivation", value=True)
+            st.caption("✓ Enzyme deactivation & time dependence")
             
-            fit_model_c = st.checkbox("모델 C: 물질전달 제한", value=True)
-            st.caption("✓ 확산 제한 & 접근성 제약")
+            fit_model_c = st.checkbox("Model C: Mass Transfer Limitation", value=True)
+            st.caption("✓ Diffusion limit & accessibility")
         
         with col2:
-            st.markdown("**확장 모델 (Fmax 의존성)**")
-            fit_model_d = st.checkbox("모델 D: 농도 의존 Fmax", value=True)
-            st.caption("✓ 겔 침투 깊이 & 2차 절단")
+            st.markdown("**Extended models (Fmax dependence)**")
+            fit_model_d = st.checkbox("Model D: Concentration-Dependent Fmax", value=True)
+            st.caption("✓ Gel penetration depth & secondary cleavage")
             
-            fit_model_e = st.checkbox("모델 E: 생성물 억제", value=True)
-            st.caption("✓ 생성물 축적 & 경쟁 억제")
+            fit_model_e = st.checkbox("Model E: Product Inhibition", value=True)
+            st.caption("✓ Product accumulation & competitive inhibition")
             
-            fit_model_f = st.checkbox("모델 F: 효소 흡착/격리", value=True)
-            st.caption("✓ 표면 흡착 & 비가역 결합")
+            fit_model_f = st.checkbox("Model F: Enzyme Adsorption/Sequestration", value=True)
+            st.caption("✓ Surface adsorption & irreversible binding")
         
         if st.button("🚀 Run Global Fitting", type="primary"):
             # 데이터 상태 확인 및 검증
-            with st.expander("🔍 데이터 상태 확인", expanded=False):
-                st.write("**필수 컬럼 확인:**")
+            with st.expander("🔍 Data status", expanded=False):
+                st.write("**Required columns:**")
                 required_cols = ['alpha', 'time_s', 'FL_intensity']
                 missing_cols = [col for col in required_cols if col not in df.columns]
                 if missing_cols:
-                    st.error(f"❌ 누락된 컬럼: {missing_cols}")
+                    st.error(f"❌ Missing columns: {missing_cols}")
                     st.stop()
                 else:
-                    st.success(f"✅ 필수 컬럼 존재: {required_cols}")
+                    st.success(f"✅ Required columns present: {required_cols}")
                 
-                st.write("**데이터 통계:**")
-                st.write(f"- 전체 데이터 포인트: {len(df)}")
-                st.write(f"- Alpha 범위: {df['alpha'].min():.4f} ~ {df['alpha'].max():.4f}")
-                st.write(f"- Alpha 평균: {df['alpha'].mean():.4f}")
-                st.write(f"- Alpha 표준편차: {df['alpha'].std():.4f}")
-                st.write(f"- 시간 범위: {df['time_s'].min():.2f} ~ {df['time_s'].max():.2f} 초")
+                st.write("**Data statistics:**")
+                st.write(f"- Total data points: {len(df)}")
+                st.write(f"- Alpha range: {df['alpha'].min():.4f} ~ {df['alpha'].max():.4f}")
+                st.write(f"- Alpha mean: {df['alpha'].mean():.4f}")
+                st.write(f"- Alpha std: {df['alpha'].std():.4f}")
+                st.write(f"- Time range: {df['time_s'].min():.2f} ~ {df['time_s'].max():.2f} s")
                 
-                # 농도별 alpha 분포 확인
                 conc_col = 'enzyme_ugml' if 'enzyme_ugml' in df.columns else df['conc_col_name'].iloc[0] if 'conc_col_name' in df.columns else None
                 if conc_col:
-                    st.write(f"**농도별 Alpha 통계:**")
+                    st.write("**Alpha statistics by concentration:**")
                     conc_stats = df.groupby(conc_col)['alpha'].agg(['count', 'min', 'max', 'mean', 'std'])
                     st.dataframe(conc_stats, use_container_width=True)
                 
-                # 문제가 있는 데이터 확인
                 if df['alpha'].max() < 0.1:
-                    st.warning("⚠️ Alpha 값이 모두 0.1 미만입니다. 정규화가 제대로 되지 않았을 수 있습니다.")
+                    st.warning("⚠️ All alpha values are below 0.1. Normalization may have failed.")
                 if df['alpha'].std() < 0.01:
-                    st.warning("⚠️ Alpha 값의 변동성이 매우 작습니다. 데이터가 제대로 정규화되지 않았을 수 있습니다.")
+                    st.warning("⚠️ Alpha variability is very low. Data may not be properly normalized.")
             
             results = []
             
@@ -1099,92 +1094,92 @@ def general_analysis_mode(st):
             # Model A
             if fit_model_a:
                 with status_container:
-                    with st.spinner("🔄 모델 A: 기질 고갈 피팅 중..."):
+                    with st.spinner("🔄 Fitting Model A: Substrate Depletion..."):
                         model_a = ModelA_SubstrateDepletion(enzyme_mw=enzyme_mw)
                         result_a = model_a.fit_global(df, verbose_callback=verbose_callback)
                         results.append(result_a)
                 
                 if result_a:
                     with result_container:
-                        st.success(f"✅ 모델 A 완료: R² = {result_a.r_squared:.4f}, AIC = {result_a.aic:.2f}")
+                        st.success(f"✅ Model A done: R² = {result_a.r_squared:.4f}, AIC = {result_a.aic:.2f}")
                 else:
                     with result_container:
-                        st.error("❌ 모델 A 피팅 실패")
+                        st.error("❌ Model A fitting failed")
             
             # Model B
             if fit_model_b:
                 with status_container:
-                    with st.spinner("🔄 모델 B: 효소 비활성화 피팅 중..."):
+                    with st.spinner("🔄 Fitting Model B: Enzyme Deactivation..."):
                         model_b = ModelB_EnzymeDeactivation(enzyme_mw=enzyme_mw)
                         result_b = model_b.fit_global(df, verbose_callback=verbose_callback)
                         results.append(result_b)
                 
                 if result_b:
                     with result_container:
-                        st.success(f"✅ 모델 B 완료: R² = {result_b.r_squared:.4f}, AIC = {result_b.aic:.2f}")
+                        st.success(f"✅ Model B done: R² = {result_b.r_squared:.4f}, AIC = {result_b.aic:.2f}")
                 else:
                     with result_container:
-                        st.error("❌ 모델 B 피팅 실패")
+                        st.error("❌ Model B fitting failed")
             
             # Model C
             if fit_model_c:
                 with status_container:
-                    with st.spinner("🔄 모델 C: 물질전달 제한 피팅 중..."):
+                    with st.spinner("🔄 Fitting Model C: Mass Transfer Limitation..."):
                         model_c = ModelC_MassTransfer(enzyme_mw=enzyme_mw)
                         result_c = model_c.fit_global(df, verbose_callback=verbose_callback)
                         results.append(result_c)
                 
                 if result_c:
                     with result_container:
-                        st.success(f"✅ 모델 C 완료: R² = {result_c.r_squared:.4f}, AIC = {result_c.aic:.2f}")
+                        st.success(f"✅ Model C done: R² = {result_c.r_squared:.4f}, AIC = {result_c.aic:.2f}")
                 else:
                     with result_container:
-                        st.error("❌ 모델 C 피팅 실패")
+                        st.error("❌ Model C fitting failed")
             
             # Model D
             if fit_model_d:
                 with status_container:
-                    with st.spinner("🔄 모델 D: 농도 의존 Fmax 피팅 중..."):
+                    with st.spinner("🔄 Fitting Model D: Concentration-Dependent Fmax..."):
                         model_d = ModelD_ConcentrationDependentFmax(enzyme_mw=enzyme_mw)
                         result_d = model_d.fit_global(df, verbose_callback=verbose_callback)
                         results.append(result_d)
                 
                 if result_d:
                     with result_container:
-                        st.success(f"✅ 모델 D 완료: R² = {result_d.r_squared:.4f}, AIC = {result_d.aic:.2f}")
+                        st.success(f"✅ Model D done: R² = {result_d.r_squared:.4f}, AIC = {result_d.aic:.2f}")
                 else:
                     with result_container:
-                        st.error("❌ 모델 D 피팅 실패")
+                        st.error("❌ Model D fitting failed")
             
             # Model E
             if fit_model_e:
                 with status_container:
-                    with st.spinner("🔄 모델 E: 생성물 억제 피팅 중..."):
+                    with st.spinner("🔄 Fitting Model E: Product Inhibition..."):
                         model_e = ModelE_ProductInhibition(enzyme_mw=enzyme_mw)
                         result_e = model_e.fit_global(df, verbose_callback=verbose_callback)
                         results.append(result_e)
                 
                 if result_e:
                     with result_container:
-                        st.success(f"✅ 모델 E 완료: R² = {result_e.r_squared:.4f}, AIC = {result_e.aic:.2f}")
+                        st.success(f"✅ Model E done: R² = {result_e.r_squared:.4f}, AIC = {result_e.aic:.2f}")
                 else:
                     with result_container:
-                        st.error("❌ 모델 E 피팅 실패")
+                        st.error("❌ Model E fitting failed")
             
             # Model F
             if fit_model_f:
                 with status_container:
-                    with st.spinner("🔄 모델 F: 효소 흡착/격리 피팅 중..."):
+                    with st.spinner("🔄 Fitting Model F: Enzyme Adsorption/Sequestration..."):
                         model_f = ModelF_EnzymeSurfaceSequestration(enzyme_mw=enzyme_mw)
                         result_f = model_f.fit_global(df, verbose_callback=verbose_callback)
                         results.append(result_f)
                 
                 if result_f:
                     with result_container:
-                        st.success(f"✅ 모델 F 완료: R² = {result_f.r_squared:.4f}, AIC = {result_f.aic:.2f}")
+                        st.success(f"✅ Model F done: R² = {result_f.r_squared:.4f}, AIC = {result_f.aic:.2f}")
                 else:
                     with result_container:
-                        st.error("❌ 모델 F 피팅 실패")
+                        st.error("❌ Model F fitting failed")
             
             # Clear status container after all done
             status_container.empty()
@@ -1198,109 +1193,104 @@ def general_analysis_mode(st):
                 st.success("🎉 All model fitting complete! Check results in the 'Model Comparison' tab.")
     
     with tab_desc:
-        st.subheader("📚 키네틱 모델 상세 설명")
+        st.subheader("📚 Kinetic Model Description")
         st.markdown(r"""
-        이 시뮬레이터는 펩타이드 기질과 효소 반응을 분석하기 위해 6가지 키네틱 모델을 제공합니다.
+        This simulator provides six kinetic models for analyzing peptide substrate–enzyme reactions.
         
-        #### 1. 기본 모델 (Basic Models)
-        고전적인 효소 반응 속도론을 기반으로 하며, Fmax가 효소 농도에 독립적인 경우를 가정합니다.
+        #### 1. Basic Models (A–C)
+        Based on classical enzyme kinetics; Fmax is assumed independent of enzyme concentration.
 
-        **📌 모델 A: 기질 고갈 (Substrate Depletion)**
-        - **개요**: 가장 기본적인 1차 반응 모델입니다. 기질([S])이 소모됨에 따라 반응 속도가 감소합니다.
-        - **수식**:
+        **📌 Model A: Substrate Depletion**
+        - **Overview**: First-order reaction; rate decreases as substrate [S] is consumed.
+        - **Equations**:
           $$ \alpha(t) = 1 - e^{-k_{obs} \cdot t} $$
           $$ k_{obs} = \frac{k_{cat}}{K_M} \cdot [E] $$
-        - **파라미터**:
-          - $k_{cat}/K_M$: 촉매 효율 ($M^{-1}s^{-1}$)
-        - **특징**: 
-          - [E]가 낮을 때 초기 속도 v₀는 [E]에 선형 비례합니다.
-          - 시간이 지나면 모든 기질이 절단되어 정규화된 형광값 α가 1에 도달합니다.
+        - **Parameters**:
+          - $k_{cat}/K_M$: Catalytic efficiency ($M^{-1}s^{-1}$)
+        - **Notes**: 
+          - At low [E], initial rate v₀ is linear in [E].
+          - At long times, all substrate is cleaved and α → 1.
 
-        **📌 모델 B: 효소 비활성화 (Enzyme Deactivation)**
-        - **개요**: 반응 진행 중 효소가 서서히 활성을 잃는 현상을 설명합니다.
-        - **수식**:
-          효소 농도가 지수적으로 감소한다고 가정 ($[E]_t = [E]_0 \cdot e^{-k_d t}$)
+        **📌 Model B: Enzyme Deactivation**
+        - **Overview**: Enzyme gradually loses activity during the reaction.
+        - **Equations**:
+          Enzyme concentration decays exponentially: $[E]_t = [E]_0 \cdot e^{-k_d t}$
           $$ \alpha(t) = 1 - \exp\left[-\frac{k_{cat}/K_M \cdot [E]_0}{k_d} (1 - e^{-k_d t})\right] $$
-        - **파라미터**:
-          - $k_{cat}/K_M$: 촉매 효율 ($M^{-1}s^{-1}$)
-          - $k_d$: 효소 비활성화 속도 상수 ($s^{-1}$)
-        - **특징**:
-          - 반응 곡선이 예상보다 일찍 평형에 도달하며, 기질이 남아있음에도 반응이 멈출 수 있습니다 ($\alpha_{\infty} < 1$).
+        - **Parameters**:
+          - $k_{cat}/K_M$: Catalytic efficiency ($M^{-1}s^{-1}$)
+          - $k_d$: Deactivation rate constant ($s^{-1}$)
+        - **Notes**: Curve plateaus earlier than expected; reaction can stop with substrate left ($\alpha_{\infty} < 1$).
 
-        **📌 모델 C: 물질전달 제한 (Mass Transfer Limitation)**
-        - **개요**: 효소가 기질 표면으로 확산되는 속도가 반응 속도보다 느린 경우입니다.
-        - **수식**:
-          표면 효소 농도 $[E]_s$는 벌크 농도 $[E]_b$보다 낮음
+        **📌 Model C: Mass Transfer Limitation**
+        - **Overview**: Diffusion of enzyme to the substrate surface is slower than the reaction.
+        - **Equations**:
+          Surface enzyme concentration $[E]_s$ is lower than bulk $[E]_b$
           $$ [E]_s \approx \frac{[E]_b}{1 + Da}, \quad Da = \frac{k_{cat} \Gamma_0}{K_M k_m} $$
           $$ \alpha(t) = 1 - e^{-k_{obs} \cdot t}, \quad k_{obs} = \frac{k_{cat}}{K_M} [E]_s $$
-        - **파라미터**:
-          - $k_{cat}/K_M$: 촉매 효율
-          - $k_m$: 물질전달 계수 ($m/s$)
-          - $\Gamma_0$: 초기 표면 기질 밀도 ($pmol/cm^2$)
-        - **특징**:
-          - 초기 반응 속도가 확산에 의해 제한되므로, 효소 농도가 높아져도 반응 속도가 비례해서 증가하지 않고 포화됩니다.
+        - **Parameters**:
+          - $k_{cat}/K_M$: Catalytic efficiency
+          - $k_m$: Mass transfer coefficient ($m/s$)
+          - $\Gamma_0$: Initial surface substrate density ($pmol/cm^2$)
+        - **Notes**: At high [E], rate saturates due to diffusion limit.
 
         ---
 
-        #### 2. 확장 모델 (Extended Models)
-        Fmax(최대 형광값)가 효소 농도([E])에 따라 달라지는 복잡한 표면 반응을 설명합니다.
+        #### 2. Extended Models (D–F)
+        Fmax (maximum fluorescence) depends on [E]; for more complex surface reactions.
 
-        **📌 모델 D: 농도 의존 Fmax (Concentration Dependent Fmax)**
-        - **개요**: 효소 농도가 높을수록 더 많은 기질에 접근할 수 있는 경우(침투 깊이 증가 등)입니다.
-        - **수식**:
-          최대 절단율 $\alpha_{max}$가 효소 농도에 의존
+        **📌 Model D: Concentration-Dependent Fmax**
+        - **Overview**: Higher [E] allows access to more substrate (e.g. deeper gel penetration).
+        - **Equations**:
+          Maximum cleavage $\alpha_{max}$ depends on [E]
           $$ \alpha(t) = \alpha_{max}([E]) \cdot (1 - e^{-k_{obs} t}) $$
           $$ \alpha_{max}([E]) = \alpha_{\infty} \cdot (1 - e^{-k_{access} [E]}) $$
-        - **파라미터**:
-          - $k_{cat}/K_M$: 촉매 효율
-          - $\alpha_{\infty}$: 이론적 최대 절단 비율
-          - $k_{access}$: 접근성 계수 ($M^{-1}$)
-        - **특징**:
-          - 낮은 [E]에서는 표면 기질만 절단되지만, 높은 [E]에서는 내부 기질까지 절단되어 최종 형광값(Fmax)이 증가합니다.
+        - **Parameters**:
+          - $k_{cat}/K_M$: Catalytic efficiency
+          - $\alpha_{\infty}$: Theoretical maximum cleavage
+          - $k_{access}$: Accessibility coefficient ($M^{-1}$)
+        - **Notes**: At low [E] only surface is cleaved; at high [E], Fmax increases.
 
-        **📌 모델 E: 생성물 억제 (Product Inhibition)**
-        - **개요**: 반응 생성물이 효소의 활성 부위에 결합하여 반응을 방해하는 경우입니다.
-        - **수식**:
-          경쟁적 억제 모델을 미분방정식으로 풀이
+        **📌 Model E: Product Inhibition**
+        - **Overview**: Reaction product binds the active site and inhibits the enzyme.
+        - **Equations**:
+          Competitive inhibition
           $$ \frac{d\alpha}{dt} = \frac{k_{obs}(1-\alpha)}{1 + K_{i,eff}\alpha} $$
-        - **파라미터**:
-          - $k_{cat}/K_M$: 촉매 효율
-          - $K_{i,eff}$: 유효 억제 상수 (무차원, $[S]_0/K_i$)
-        - **특징**:
-          - 반응 초기에 비해 후반부 속도가 급격히 감소합니다.
+        - **Parameters**:
+          - $k_{cat}/K_M$: Catalytic efficiency
+          - $K_{i,eff}$: Effective inhibition constant (dimensionless, $[S]_0/K_i$)
+        - **Notes**: Rate drops sharply in the later phase.
 
-        **📌 모델 F: 효소 흡착/격리 (Enzyme Surface Sequestration)**
-        - **개요**: 효소가 기질 표면이나 겔 매트릭스에 비가역적으로 흡착되어 반응에 참여하지 못하는 경우입니다.
-        - **수식**:
-          효소가 표면에 흡착되어($k_{ads}$) 고갈됨
+        **📌 Model F: Enzyme Surface Sequestration**
+        - **Overview**: Enzyme is irreversibly adsorbed to the surface or gel and unavailable for reaction.
+        - **Equations**:
+          Enzyme depleted by surface adsorption ($k_{ads}$)
           $$ \alpha(t) \approx \frac{(k_{cat}/K_M)[E]}{k_{ads}(1+K_{ads}[E])} (1 - e^{-k_{ads} t}) $$
-        - **파라미터**:
-          - $k_{cat}/K_M$: 촉매 효율
-          - $k_{ads}$: 흡착 속도 상수 ($s^{-1}$)
-          - $K_{ads}$: 흡착 평형 상수 ($M^{-1}$)
-        - **특징**:
-          - 높은 [E]에서도 예상보다 낮은 반응성을 보일 수 있습니다.
+        - **Parameters**:
+          - $k_{cat}/K_M$: Catalytic efficiency
+          - $k_{ads}$: Adsorption rate constant ($s^{-1}$)
+          - $K_{ads}$: Adsorption equilibrium constant ($M^{-1}$)
+        - **Notes**: Reactivity can be lower than expected even at high [E].
           
-        ### 📊 모델 적합도 평가 기준 (AIC)
+        ### 📊 Model fit: AIC
 
         **Akaike Information Criterion (AIC)**  
-        모델의 적합도(Goodness of fit)와 복잡도(Complexity) 사이의 균형을 평가하는 지표입니다. 값이 작을수록 더 좋은 모델로 간주합니다.
+        Balances goodness of fit and model complexity; lower is better.
 
-        **계산식**:
+        **Formula**:
         $$ AIC = 2k - 2\ln(\hat{L}) $$
-        여기서:
-        - $k$: 모델의 파라미터 수
-        - $\hat{L}$: 모델의 최대 우도(Maximum Likelihood)
+        where:
+        - $k$: number of parameters
+        - $\hat{L}$: maximum likelihood
 
-        본 프로그램에서는 잔차 제곱합(RSS)을 이용하여 다음과 같이 계산합니다:
+        Here we use RSS-based:
         $$ AIC = n \ln\left(\frac{RSS}{n}\right) + 2k + C $$
-        - $n$: 전체 데이터 포인트 수
-        - $RSS$: 잔차 제곱합 ($\sum (y_{obs} - y_{pred})^2$)
-        - $C$: 상수항 (전체 우도 식 포함)
+        - $n$: number of data points
+        - $RSS$: residual sum of squares ($\sum (y_{obs} - y_{pred})^2$)
+        - $C$: constant
 
-        **해석**:
-        - **ΔAIC < 2**: 두 모델 간 유의미한 차이가 없음
-        - **ΔAIC > 10**: AIC가 낮은 모델이 통계적으로 훨씬 더 적합함
+        **Interpretation**:
+        - **ΔAIC < 2**: No significant difference between models
+        - **ΔAIC > 10**: Lower-AIC model is strongly preferred
         """)
 
     with tab3:
@@ -1320,18 +1310,18 @@ def general_analysis_mode(st):
                 best_aic = min(r.aic for r in valid_results)
                 best_model = [r for r in valid_results if r.aic == best_aic][0]
                 
-                st.success(f"🏆 최적 모델 (최저 AIC): **{best_model.name}** (AIC = {best_model.aic:.2f})")
+                st.success(f"🏆 Best model (lowest AIC): **{best_model.name}** (AIC = {best_model.aic:.2f})")
                 
                 # Parameter details for best model
-                st.subheader(f"최적 모델 파라미터: {best_model.name}")
+                st.subheader(f"Best model parameters: {best_model.name}")
                 param_data = []
                 for param, value in best_model.params.items():
                     std = best_model.params_std.get(param, 0)
                     param_data.append({
-                        '파라미터': param,
-                        '값': f"{value:.4e}",
-                        '표준오차': f"{std:.4e}",
-                        '상대오차': f"{(std/value*100):.2f}%" if value != 0 else "N/A"
+                        'Parameter': param,
+                        'Value': f"{value:.4e}",
+                        'Std. Error': f"{std:.4e}",
+                        'Rel. Error': f"{(std/value*100):.2f}%" if value != 0 else "N/A"
                     })
                 st.dataframe(pd.DataFrame(param_data), use_container_width=True)
             
@@ -1350,7 +1340,7 @@ def general_analysis_mode(st):
             
             # Individual model plots
             st.subheader("📊 Individual Model Comparison")
-            st.markdown("각 모델별로 원본 데이터와 피팅 결과를 비교합니다.")
+            st.markdown("Compare raw data and fitted results for each model.")
             
             # Create tabs for each model
             model_names = [r.name for r in results if r is not None]
@@ -1375,7 +1365,7 @@ def general_analysis_mode(st):
                         st.plotly_chart(fig_ind, use_container_width=True)
                         
                         # Display parameters
-                        st.markdown(f"**{result.name} 파라미터**")
+                        st.markdown(f"**{result.name} parameters**")
                         param_cols = st.columns(len(result.params))
                         for col_idx, (param, value) in enumerate(result.params.items()):
                             with param_cols[col_idx]:
@@ -1390,7 +1380,7 @@ def general_analysis_mode(st):
             st.subheader("💾 Download Results")
             csv = comparison_df.to_csv(index=False)
             st.download_button(
-                label="비교 테이블 다운로드 (CSV)",
+                label="Download comparison table (CSV)",
                 data=csv,
                 file_name="model_comparison.csv",
                 mime="text/csv"
@@ -1399,7 +1389,7 @@ def general_analysis_mode(st):
             st.info("👈 Please run fitting in the 'Model Fitting' tab first.")
     
     with tab4:
-        st.subheader("💡 진단 분석")
+        st.subheader("💡 Diagnostic Analysis")
         
         # Initial rate analysis
         st.plotly_chart(
@@ -1408,115 +1398,115 @@ def general_analysis_mode(st):
         )
         
         st.markdown("""
-        ### 📋 모델 선택 가이드라인
+        ### 📋 Model selection guidelines
         
-        #### 기본 모델 (A-C)
+        #### Basic models (A–C)
         
-        **모델 A (기질 고갈)** 선호 조건:
-        - 초기 속도 v₀가 [E]에 대해 선형 관계 (낮은 [E]에서)
-        - 포화 형광 F∞ ≈ 일정 (정규화된 α → 1)
-        - 유의미한 효소 비활성화가 관찰되지 않음
+        **Model A (Substrate depletion)** when:
+        - Initial rate v₀ is linear in [E] at low [E]
+        - Saturation fluorescence F∞ ≈ constant (α → 1)
+        - No significant enzyme deactivation
         
-        **모델 B (효소 비활성화)** 선호 조건:
-        - F∞ < 이론적 최대값 (포화에서 α < 1)
-        - 빠른 초기 증가 후 예상보다 낮은 수준에서 평탄화
-        - kd > 0이며 유의미한 기여도
+        **Model B (Enzyme deactivation)** when:
+        - F∞ < theoretical maximum (α < 1 at saturation)
+        - Fast initial rise then plateau lower than expected
+        - kd > 0 with significant contribution
         
-        **모델 C (물질전달 제한)** 선호 조건:
-        - 초기 버스트(0-5초) 후 느린 접근
-        - 교반/유속에 민감
-        - 높은 [E]에서 v₀ vs [E] 그래프가 포화 양상
+        **Model C (Mass transfer)** when:
+        - Initial burst (0–5 s) then slower approach
+        - Sensitive to stirring/flow
+        - v₀ vs [E] saturates at high [E]
         
-        #### 확장 모델 (D-F): **Fmax가 [E]에 따라 변하는 경우**
+        #### Extended models (D–F): **Fmax depends on [E]**
         
-        **모델 D (농도 의존 Fmax)** 선호 조건:
-        - 높은 [E]에서 α_max 증가 (더 많은 기질 접근)
-        - 겔 침투 깊이 효과 (두꺼운/밀집 겔)
-        - 2차 절단으로 생성물 방출 증가
-        - **파라미터**: α_∞ (최대값), k_access (접근성 계수)
+        **Model D (Concentration-dependent Fmax)** when:
+        - α_max increases at higher [E] (more substrate access)
+        - Gel penetration depth (thick/dense gel)
+        - Secondary cleavage increases product release
+        - **Parameters**: α_∞, k_access
         
-        **모델 E (생성물 억제)** 선호 조건:
-        - 초기 빠른 증가 후 감속 (생성물 축적)
-        - 낮은 [E]에서 더 큰 억제 효과
-        - 생성물 제거 시 반응 속도 회복
-        - **파라미터**: Ki_eff (억제 상수)
+        **Model E (Product inhibition)** when:
+        - Fast initial rise then slowdown (product buildup)
+        - Stronger inhibition at low [E]
+        - Rate recovers when product is removed
+        - **Parameters**: Ki_eff
         
-        **모델 F (효소 흡착/격리)** 선호 조건:
-        - 높은 [E]에서 상대적으로 덜 영향받음 (포화)
-        - 음전하 표면/PDA 코팅, 밀집 겔 구조
-        - 시간에 따른 효소 활성 감소 (비가역)
-        - **파라미터**: k_ads (흡착속도), K_ads (평형상수)
+        **Model F (Enzyme adsorption/sequestration)** when:
+        - Less affected at high [E] (saturation)
+        - Negatively charged surface / PDA coating, dense gel
+        - Enzyme activity decreases over time (irreversible)
+        - **Parameters**: k_ads, K_ads
         
-        ### 📊 통계 기준
-        - **AIC/BIC**: 낮을수록 좋음 (파라미터 수 페널티)
-        - **R²**: 높을수록 좋음 (>0.95 우수)
-        - **RMSE**: 낮을수록 좋음
-        - **Δ AIC > 10**: 높은 AIC 모델에 대한 강력한 반증
-        - **Δ AIC < 2**: 모델 간 유의미한 차이 없음
+        ### 📊 Statistics
+        - **AIC/BIC**: Lower is better (parameter penalty)
+        - **R²**: Higher is better (>0.95 good)
+        - **RMSE**: Lower is better
+        - **Δ AIC > 10**: Strong evidence against the higher-AIC model
+        - **Δ AIC < 2**: No significant difference between models
         """)
         
         # Experimental suggestions
-        st.subheader("🧪 제안 후속 실험 (모델 구분)")
+        st.subheader("🧪 Suggested Follow-up Experiments")
         
         st.markdown("""
-        ### 🔍 Fmax 농도 의존성 확인 실험
+        ### 🔍 Experiments to check Fmax vs [E]
         
-        1. **다양한 [E]에서 장시간 측정** (30분-1시간)
-           - 각 농도별 포화 형광값(Fmax) 정량 측정
-           - [E] vs Fmax 플롯 → 선형/포화 양상 확인
-           - **선형 증가** → 모델 D 가능성
-           - **일정** → 기본 모델 A-C
+        1. **Long-time measurement at various [E]** (30 min–1 h)
+           - Measure saturation fluorescence (Fmax) per concentration
+           - Plot [E] vs Fmax → linear vs saturated
+           - **Linear increase** → Model D likely
+           - **Constant** → Basic models A–C
         
-        2. **겔 두께 변화 테스트** (모델 D)
-           - 얇은 겔(50 μm) vs 두꺼운 겔(500 μm)
-           - 두꺼운 겔에서 [E] 의존성 증가 → 확산 침투 제한
-           - 얇은 겔에서 [E] 독립적 → 표면 반응 우세
+        2. **Gel thickness** (Model D)
+           - Thin (50 μm) vs thick (500 μm) gel
+           - Thick gel: stronger [E] dependence → diffusion/penetration limit
+           - Thin gel: [E]-independent → surface reaction dominant
         
-        3. **생성물 첨가 실험** (모델 E)
-           - 미리 절단된 펩타이드 조각 첨가
-           - 반응 초기 속도 감소 → 생성물 억제 증명
-           - 높은 [생성물]에서 α_max 감소 관찰
+        3. **Product addition** (Model E)
+           - Add pre-cleaved peptide
+           - Initial rate drops → product inhibition
+           - α_max decreases at high [product]
         
-        4. **표면 처리 변화** (모델 F)
-           - 양전하 표면 vs 음전하(PDA) vs 중성(PEG)
-           - 음전하 표면에서 [E] 의존성 강화 → 흡착 증명
-           - PEG 표면에서 흡착 감소 → 모델 D/E로 전환
+        4. **Surface treatment** (Model F)
+           - Positive vs negative (PDA) vs neutral (PEG) surface
+           - Negative surface: stronger [E] dependence → adsorption
+           - PEG: less adsorption → consider D/E
         
-        ### 🧬 고전적 메커니즘 테스트
+        ### 🧬 Classical mechanism tests
         
-        5. **Pulse-chase 실험** (모델 B)
-           - t=5분에 신선한 효소 재투입
-           - 곡선 재상승 → 기질 남음 (모델 A)
-           - 변화 없음 → 효소 비활성화 (모델 B)
+        5. **Pulse-chase** (Model B)
+           - Add fresh enzyme at t=5 min
+           - Curve rises again → substrate left (Model A)
+           - No change → enzyme deactivation (Model B)
         
-        6. **교반/유속 변화** (모델 C)
-           - 정적 vs 회전 (100 rpm) vs 관류 (1 mL/min)
-           - 유속 증가로 α 증가 → 물질전달 제한
-           - 변화 없음 → 반응속도 제한 (모델 A/B)
+        6. **Stirring/flow** (Model C)
+           - Static vs rotation (100 rpm) vs flow (1 mL/min)
+           - Higher flow → higher α → mass transfer limit
+           - No change → reaction-limited (A/B)
         
-        7. **기질 밀도 변화** (모델 A)
-           - 0.5배, 1배, 2배 펩타이드 고정화
-           - Fmax 비례 증가 → 기질 고갈
-           - Fmax 불변 → 다른 메커니즘 우세
+        7. **Substrate density** (Model A)
+           - 0.5×, 1×, 2× peptide immobilization
+           - Fmax scales → substrate depletion
+           - Fmax unchanged → other mechanism
         
-        8. **용액상 대조실험**
-           - 가용성 기질 (같은 농도)
-           - 완전 절단(α→1) → 표면/확산 문제
-           - 불완전 절단 → 본질적 억제/비활성화
+        8. **Solution-phase control**
+           - Soluble substrate (same concentration)
+           - Full cleavage (α→1) → surface/diffusion issue
+           - Incomplete → intrinsic inhibition/deactivation
         
-        ### 🎯 모델 결정 트리
+        ### 🎯 Model decision tree
         
         ```
-        Fmax가 [E]에 따라 증가하는가?
-        ├─ YES → 확장 모델 (D-F) 테스트
-        │   ├─ 겔 두께 민감? → 모델 D (침투)
-        │   ├─ 생성물 첨가로 감소? → 모델 E (억제)
-        │   └─ 표면 전하 민감? → 모델 F (흡착)
+        Does Fmax increase with [E]?
+        ├─ YES → Test extended models (D–F)
+        │   ├─ Gel thickness sensitive? → Model D (penetration)
+        │   ├─ Product addition reduces rate? → Model E (inhibition)
+        │   └─ Surface charge sensitive? → Model F (adsorption)
         │
-        └─ NO → 기본 모델 (A-C) 테스트
-            ├─ Pulse-chase 반응? → 모델 A (기질)
-            ├─ 시간에 따라 α_max↓? → 모델 B (비활성)
-            └─ 유속에 민감? → 모델 C (확산)
+        └─ NO → Test basic models (A–C)
+            ├─ Pulse-chase response? → Model A (substrate)
+            ├─ α_max decreases with time? → Model B (deactivation)
+            └─ Flow sensitive? → Model C (diffusion)
         ```
         """)
 

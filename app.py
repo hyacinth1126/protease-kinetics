@@ -97,7 +97,7 @@ def main():
     except Exception as e:
         _cloud_log("main(): Model Simulation Mode failed")
         _cloud_log_exception()
-        st.error("Model Simulation Mode 로드 중 오류가 발생했습니다.")
+        st.error("An error occurred while loading Model Simulation Mode.")
         st.code(str(e), language="text")
         st.exception(e)
 
