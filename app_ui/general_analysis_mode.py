@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import numpy as np
 import os
 from pathlib import Path
+from scipy.optimize import curve_fit
 
 def _debug_log(msg: str) -> None:
     """Cloud 로그용: stderr에 출력 후 flush"""
@@ -78,37 +79,86 @@ def verbose_callback(message: str, level: str = "info"):
         st.info(message)
 
 
+# Known enzyme molecular weights (kDa) for raw_* filename convention
+_KNOWN_ENZYME_MW = {"RgpA": 56.0, "RgpB": 43.3}
+
+
+def _parse_filename_for_model_simulation(filename: str):
+    """
+    Parse CSV/XLSX filename to extract Enzyme Name, MW (kDa), Substrate Name.
+    - raw_*.ext: * is enzyme name (e.g. raw_RgpA.csv → RgpA); MW from _KNOWN_ENZYME_MW if present.
+    - EnzymeName_MW_SubstrateName.ext: (e.g. RgpA_56.60_Dabcyl-HEK-K(FITC).csv)
+    Returns (enzyme_name, mw_float or None, substrate_name).
+    """
+    if not filename or not isinstance(filename, str):
+        return None, None, None
+    base = os.path.splitext(filename.strip())[0]
+    if base.lower().startswith('raw_') and len(base) > 4:
+        enzyme_name = base[4:].strip()
+        mw = _KNOWN_ENZYME_MW.get(enzyme_name)
+        return enzyme_name, mw, None
+    parts = base.split('_')
+    enzyme_name = None
+    mw = None
+    substrate_name = None
+    if len(parts) >= 3:
+        enzyme_name = parts[0].strip() or None
+        try:
+            mw = float(parts[1].strip())
+        except (ValueError, TypeError):
+            pass
+        substrate_name = '_'.join(parts[2:]).strip() or None
+    elif len(parts) == 2:
+        enzyme_name = parts[0].strip() or None
+        try:
+            mw = float(parts[1].strip())
+        except (ValueError, TypeError):
+            pass
+    elif len(parts) == 1 and parts[0].strip():
+        enzyme_name = parts[0].strip()
+    return enzyme_name, mw, substrate_name
+
+
 def general_analysis_mode(st):
     """Model Simulation Mode - Standard FRET Analysis"""
     _debug_log("general_analysis_mode(): entered")
+
+    # Default values; will be overridden from session_state if set by filename parsing
+    default_mw = 56.6
+    default_enzyme_name = "Kgp"
+    default_substrate_name = "Dabcyl-HEK-K(FITC)"
 
     # Sidebar configuration
     enzyme_mw = st.sidebar.number_input(
         "Enzyme Molecular Weight (kDa)",
         min_value=1.0,
         max_value=500.0,
-        value=56.6,
+        value=st.session_state.get('parsed_enzyme_mw', default_mw),
         step=0.1,
-        help="Enter enzyme molecular weight required for concentration conversion."
+        key="model_sim_enzyme_mw",
+        help="Enter enzyme molecular weight required for concentration conversion. Auto-filled from filename (EnzymeName_MW_SubstrateName)."
     )
     
     enzyme_name = st.sidebar.text_input(
         "Enzyme Name (Optional)",
-        value="Kgp",
+        value=st.session_state.get('parsed_enzyme_name', default_enzyme_name),
         placeholder="enzyme",
-        help="Enzyme name displayed in graph legend (defaults to 'enzyme' if empty)"
+        key="model_sim_enzyme_name",
+        help="Enzyme name displayed in graph legend. Auto-filled from filename (EnzymeName_MW_SubstrateName)."
     )
     if enzyme_name.strip() == "":
         enzyme_name = "enzyme"
     
     substrate_name = st.sidebar.text_input(
         "Substrate Name (Optional)",
-        value="Dabcyl-HEK-K(FITC)",
+        value=st.session_state.get('parsed_substrate_name', default_substrate_name),
         placeholder="substrate",
-        help="Substrate name displayed in graph legend (defaults to 'substrate' if empty)"
+        key="model_sim_substrate_name",
+        help="Substrate name displayed in graph legend. Auto-filled from filename (EnzymeName_MW_SubstrateName)."
     )
     if substrate_name.strip() == "":
         substrate_name = "substrate"
+
     # Separator before data source section
     st.sidebar.markdown("---")
     st.sidebar.subheader("📁 Data Source")
@@ -116,8 +166,27 @@ def general_analysis_mode(st):
     uploaded_file = st.sidebar.file_uploader(
         "Upload CSV/XLSX File (Fitted Curves)",
         type=['csv', 'xlsx'],
-        help="Result file generated from Data Load Mode (CSV or XLSX): For XLSX, use 'Time–FLU Interpolated curves' sheet"
+        key="model_sim_upload",
+        help="Result file from Data Load Mode. Filename format 'EnzymeName_MW_SubstrateName.csv' auto-fills the fields above."
     )
+
+    # When a file is loaded, parse filename and update session_state so inputs show parsed values on next run
+    if uploaded_file is not None and getattr(uploaded_file, 'name', None):
+        current_name = uploaded_file.name
+        last_parsed = st.session_state.get('last_parsed_filename_for_model')
+        if last_parsed != current_name:
+            ename, mw, sname = _parse_filename_for_model_simulation(current_name)
+            if ename is not None:
+                st.session_state['parsed_enzyme_name'] = ename
+                st.session_state['model_sim_enzyme_name'] = ename
+            if mw is not None:
+                st.session_state['parsed_enzyme_mw'] = mw
+                st.session_state['model_sim_enzyme_mw'] = mw
+            if sname is not None:
+                st.session_state['parsed_substrate_name'] = sname
+                st.session_state['model_sim_substrate_name'] = sname
+            st.session_state['last_parsed_filename_for_model'] = current_name
+            st.rerun()
     
     # Download sample Fitted Curves (Data Load Mode results)
     try:
@@ -143,6 +212,7 @@ def general_analysis_mode(st):
             results = st.session_state['interpolation_results']
             df_fitted = results['interp_df'].copy()
             rfu_col = 'RFU_Interpolated' if 'RFU_Interpolated' in df_fitted.columns else 'RFU_Calculated'
+            st.session_state['data_source_type'] = 'Data Load result (in memory)'
             # Check experiment_type to display basis
             experiment_type = results.get('experiment_type', 'Substrate Concentration Variation (Standard Michaelis-Menten)')
             if experiment_type == "Substrate Concentration Variation (Standard Michaelis-Menten)":
@@ -155,7 +225,7 @@ def general_analysis_mode(st):
             pass
 
     if uploaded_file is not None:
-        # 업로드된 파일 처리
+        # 업로드된 파일 처리 (업로드 시 항상 파일 기준으로 덮어씀)
         import tempfile
         file_extension = uploaded_file.name.split('.')[-1].lower()
         
@@ -163,6 +233,7 @@ def general_analysis_mode(st):
             tmp_file.write(uploaded_file.getbuffer())
             tmp_path = tmp_file.name
         
+        st.session_state['data_source_type'] = f"Uploaded file: {uploaded_file.name}"
         try:
             if file_extension == 'xlsx':
                 # XLSX 파일: "Time–FLU Interpolated curves" 또는 구 시트명 시트 읽기
@@ -182,56 +253,54 @@ def general_analysis_mode(st):
         finally:
             os.unlink(tmp_path)
     else:
-        # Data Load 모드에서 생성된 결과 파일 자동 로드 (1순위: XLSX, 2순위: CSV)
+        # 업로드 없음: Data Load 결과(df_fitted)가 이미 있으면 유지, 없을 때만 파일에서 로드
         import os
         from pathlib import Path
         
-        df_fitted = None
-        
-        # 1순위: XLSX 파일 (Michaelis-Menten_calibration_results.xlsx)
-        xlsx_paths = [
-            'Michaelis-Menten_calibration_results.xlsx',
-            str(Path(__file__).parent.parent / 'Michaelis-Menten_calibration_results.xlsx'),
-        ]
-        
-        for path in xlsx_paths:
-            try:
-                if os.path.exists(path):
-                    xl = pd.ExcelFile(path, engine='openpyxl')
-                    curve_sheet = ('Time–FLU Interpolated curves' if 'Time–FLU Interpolated curves' in xl.sheet_names else
-                                   ('Michaelis-Menten Curves' if 'Michaelis-Menten Curves' in xl.sheet_names else
-                                    ('Michaelis-Menten curves' if 'Michaelis-Menten curves' in xl.sheet_names else None)))
-                    df_fitted = pd.read_excel(path, sheet_name=curve_sheet or 'Time–FLU Interpolated curves', engine='openpyxl') if curve_sheet else pd.read_excel(path, sheet_name=1, engine='openpyxl')
-                    c0, c1, c2 = (df_fitted.columns[0], df_fitted.columns[1], df_fitted.columns[2]) if len(df_fitted.columns) >= 3 else (None, None, None)
-                    if c0 is not None and 'concentration' in str(c0).lower() and 'time_min' in str(c1).lower() and 'rfu_interpolated' in str(c2).lower() and len(df_fitted.columns) % 3 == 0:
-                        df_fitted = _wide_mm_curves_to_long(df_fitted)
-                    rfu_col = 'RFU_Interpolated' if 'RFU_Interpolated' in df_fitted.columns else ('rfu_interpolated' if 'rfu_interpolated' in df_fitted.columns else 'RFU_Calculated')
-                    break
-            except Exception:
-                continue
-        
-        # 2순위: CSV 파일
         if df_fitted is None:
-            csv_paths = [
-                'data_interpolation_mode/results/MM_interpolated_curves.csv',
-                str(Path(__file__).parent.parent / 'data_interpolation_mode' / 'results' / 'MM_interpolated_curves.csv'),
+            # 1순위: XLSX 파일 (Michaelis-Menten_calibration_results.xlsx)
+            xlsx_paths = [
+                'Michaelis-Menten_calibration_results.xlsx',
+                str(Path(__file__).parent.parent / 'Michaelis-Menten_calibration_results.xlsx'),
             ]
             
-            for path in csv_paths:
+            for path in xlsx_paths:
                 try:
                     if os.path.exists(path):
-                        df_fitted = pd.read_csv(path)
-                        rfu_col = 'RFU_Interpolated' if 'RFU_Interpolated' in df_fitted.columns else 'RFU_Calculated'
+                        xl = pd.ExcelFile(path, engine='openpyxl')
+                        curve_sheet = ('Time–FLU Interpolated curves' if 'Time–FLU Interpolated curves' in xl.sheet_names else
+                                       ('Michaelis-Menten Curves' if 'Michaelis-Menten Curves' in xl.sheet_names else
+                                        ('Michaelis-Menten curves' if 'Michaelis-Menten curves' in xl.sheet_names else None)))
+                        df_fitted = pd.read_excel(path, sheet_name=curve_sheet or 'Time–FLU Interpolated curves', engine='openpyxl') if curve_sheet else pd.read_excel(path, sheet_name=1, engine='openpyxl')
+                        c0, c1, c2 = (df_fitted.columns[0], df_fitted.columns[1], df_fitted.columns[2]) if len(df_fitted.columns) >= 3 else (None, None, None)
+                        if c0 is not None and 'concentration' in str(c0).lower() and 'time_min' in str(c1).lower() and 'rfu_interpolated' in str(c2).lower() and len(df_fitted.columns) % 3 == 0:
+                            df_fitted = _wide_mm_curves_to_long(df_fitted)
+                        rfu_col = 'RFU_Interpolated' if 'RFU_Interpolated' in df_fitted.columns else ('rfu_interpolated' if 'rfu_interpolated' in df_fitted.columns else 'RFU_Calculated')
                         break
                 except Exception:
                     continue
+        
+            # 2순위: CSV 파일
+            if df_fitted is None:
+                csv_paths = [
+                    'data_interpolation_mode/results/MM_interpolated_curves.csv',
+                    str(Path(__file__).parent.parent / 'data_interpolation_mode' / 'results' / 'MM_interpolated_curves.csv'),
+                ]
+                for path in csv_paths:
+                    try:
+                        if os.path.exists(path):
+                            df_fitted = pd.read_csv(path)
+                            rfu_col = 'RFU_Interpolated' if 'RFU_Interpolated' in df_fitted.columns else 'RFU_Calculated'
+                            break
+                    except Exception:
+                        continue
         
         if df_fitted is None:
             st.error("Data Load Mode result file not found. Please run 'Data Load Mode' to download results or upload a CSV/XLSX file.")
             st.stop()
         
         # rfu_col이 아직 설정되지 않았으면 설정
-        if rfu_col is None:
+        if rfu_col is None and df_fitted is not None:
             if 'RFU_Interpolated' in df_fitted.columns:
                 rfu_col = 'RFU_Interpolated'
             elif 'RFU_Calculated' in df_fitted.columns:
@@ -535,38 +604,34 @@ def general_analysis_mode(st):
     
     df = df_current
     
-    # Display data
-    st.subheader("📊 Data Preview")
+    # Display data (aligned with Data Load Mode: 📋 Data Preview + 4 metrics + expander)
+    st.subheader("📋 Data Preview")
     
+    # Data Load에서 가져온 결과가 있으면 동일한 값 사용 (Data Preview 일치)
+    interp_results = st.session_state.get('interpolation_results') if st.session_state.get('mm_data_ready') else None
+
     # Detect original column names for display
     time_unit = st.session_state.get('time_unit', 'min')
-    # 원본 시간 범위 사용 (보간된 데이터가 아닌)
     original_time_max = st.session_state.get('original_time_max', df['time_s'].max())
-    if time_unit == 'min':
-        time_display = f"0 - {original_time_max:.0f} min"
+    if interp_results is not None and interp_results.get('reaction_time_max_min') is not None:
+        reaction_max = interp_results['reaction_time_max_min']
+        time_display = f"{reaction_max:.0f} min"
+        time_label = "Time (min)"
+    elif time_unit == 'min':
+        time_display = f"{original_time_max:.0f} min"
         time_label = "Time (min)"
     else:
-        time_display = f"0 - {original_time_max:.0f} s" if original_time_max < 100 else f"0 - {original_time_max/60:.1f} min"
+        time_display = f"{original_time_max:.0f} s" if original_time_max < 100 else f"{original_time_max/60:.1f} min"
         time_label = "Time (s)"
-    # Determine concentration unit from normalized data
-    # conc_col_name 컬럼이 있으면 사용, 없으면 enzyme_ugml 사용
     conc_col = 'enzyme_ugml'
-    
-    # 실험 타입 확인 (Substrate 농도 변화면 무조건 μM)
+
     experiment_type = None
-    # 1. Session state의 interpolation_results에서 확인
-    if 'interpolation_results' in st.session_state and st.session_state.get('mm_data_ready', False):
-        results = st.session_state['interpolation_results']
-        if 'mm_fit_results' in results:
-            experiment_type = results['mm_fit_results'].get('experiment_type')
-    # 2. Session state의 mm_fit_from_file에서 확인
+    if interp_results is not None and 'mm_fit_results' in interp_results:
+        experiment_type = interp_results['mm_fit_results'].get('experiment_type')
     if experiment_type is None and 'mm_fit_from_file' in st.session_state:
         experiment_type = st.session_state['mm_fit_from_file'].get('experiment_type')
-    
-    # 원래 컬럼 이름에 따른 단위 결정
+
     original_conc_col = df['conc_col_name'].iloc[0] if 'conc_col_name' in df.columns else 'Concentration [ug/mL]'
-    
-    # 실험 타입이 Substrate 농도 변화면 무조건 μM
     _substrate_std = ("Substrate 농도 변화 (표준 MM)", "Substrate Concentration Variation (Standard MM)")
     if experiment_type in _substrate_std:
         conc_unit = "μM"
@@ -576,24 +641,53 @@ def general_analysis_mode(st):
         conc_unit = "nM"
     else:
         conc_unit = "μg/mL"
-    
+
     st.session_state['time_label'] = time_label
     st.session_state['conc_unit'] = conc_unit
+
+    unique_concs = sorted(df[conc_col].unique())
+    num_concs = len(unique_concs)
+    # Data Load 모드와 동일하게: interp 있으면 그값, 없으면 Data Load 샘플 기준(8 points, N=50)
+    if interp_results is not None and interp_results.get('data_points_per_concentration') is not None:
+        points_per_conc = interp_results['data_points_per_concentration']
+    elif num_concs > 0:
+        points_per_conc = int(df.groupby(conc_col).size().iloc[0])
+    else:
+        points_per_conc = 8  # Data Load 샘플 raw_enzyme.csv 기준
+    if interp_results is not None and interp_results.get('n_replicates') is not None:
+        n_replicates = interp_results['n_replicates']
+    else:
+        n_replicates = st.session_state.get('n_replicates', 50)  # Data Load 샘플 기준 N=50
+        if n_replicates == 'N/A' or n_replicates is None:
+            n_replicates = 50
     
-    col1, col2 = st.columns(2)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
-        # Number of unique concentration conditions
-        unique_concs = sorted(df[conc_col].unique())
-        st.metric("Number of Concentration Conditions", len(unique_concs))
+        st.metric("Number of Concentrations", num_concs)
     with col2:
-        st.metric("Time Range", time_display)
+        st.metric("Data Points per Concentration", points_per_conc)
+    with col3:
+        st.metric("Reaction Time", time_display)
+    with col4:
+        st.metric("N (Number of Replicates)", n_replicates)
+    
+    with st.expander("Concentration Data Information", expanded=False):
+        if num_concs > 0:
+            alpha_col = 'alpha' if 'alpha' in df.columns else 'alpha_temp'
+            preview_cols = [conc_col, 'time_s', alpha_col]
+            preview_df = df[[c for c in preview_cols if c in df.columns]].copy()
+            rename_map = {'time_s': time_label, 'alpha': 'α (Normalized)', 'alpha_temp': 'α (Normalized)'}
+            preview_df = preview_df.rename(columns={k: v for k, v in rename_map.items() if k in preview_df.columns})
+            st.dataframe(preview_df, use_container_width=True, hide_index=True, height=400)
+        else:
+            st.info("No data available.")
     
     # Tabs for different views
-    tab1, tab_alpha, tab2, tab_desc, tab3, tab4 = st.tabs([
-        "📊 v₀ vs [S] Fit", 
+    tab1, tab_alpha, tab_evsalpha, tab2, tab3, tab4 = st.tabs([
+        "📊 v₀ vs [S] Fit",
         "📈 Alpha Calculation",
+        "📊 [E] vs α Plot",
         "🔬 Model Fitting",
-        "📖 Model Description",
         "📉 Model Comparison",
         "💡 Diagnostic Analysis"
     ])
@@ -636,8 +730,77 @@ def general_analysis_mode(st):
             v0_data = st.session_state['v0_data_from_file']
             if 'mm_fit_from_file' in st.session_state:
                 mm_fit = st.session_state['mm_fit_from_file']
-        
-        # 3. 파일에서 정규화 결과 읽기 (Normalization Results 시트 또는 MM Results 시트)
+
+        # 3. Fallback: 기본 예시 샘플 — 프로젝트 내 calibration xlsx 또는 내장 샘플
+        if (v0_data is None or mm_fit is None) and uploaded_file is None:
+            _sample_paths = [
+                Path(__file__).parent.parent / 'Michaelis-Menten_calibration_results.xlsx',
+                Path('Michaelis-Menten_calibration_results.xlsx'),
+            ]
+            for _path in _sample_paths:
+                if not getattr(_path, 'exists', lambda: os.path.exists(str(_path)))():
+                    continue
+                try:
+                    xl = pd.ExcelFile(str(_path), engine='openpyxl')
+                    mm_sheet = next((s for s in ['Model simulation input', 'Analysis mode input', 'MM Results'] if s in xl.sheet_names), None)
+                    fit_sheet = next((s for s in ['Michaelis-Menten Fit Results', 'Fit results', 'MM Fit Results'] if s in xl.sheet_names), None)
+                    if not mm_sheet or not fit_sheet:
+                        continue
+                    df_mm = pd.read_excel(str(_path), sheet_name=mm_sheet, engine='openpyxl')
+                    conc_col = 'Concentration [ug/mL]' if 'Concentration [ug/mL]' in df_mm.columns else 'Concentration'
+                    v0_col = next((c for c in ['v0', 'v0 (RFU/min)', 'v₀ (RFU/min)'] if c in df_mm.columns), None)
+                    if conc_col in df_mm.columns and v0_col:
+                        v0_concs = df_mm[conc_col].dropna().astype(float).tolist()
+                        v0_vals = df_mm[v0_col].dropna().astype(float).tolist()
+                        if len(v0_concs) == len(v0_vals) and len(v0_concs) > 0:
+                            v0_data = {'concentrations': v0_concs, 'v0_values': v0_vals}
+                            st.session_state['v0_data_from_file'] = v0_data
+                    df_fit = pd.read_excel(str(_path), sheet_name=fit_sheet, engine='openpyxl')
+                    p_col = 'Parameter' if 'Parameter' in df_fit.columns else '파라미터'
+                    v_col = 'Value' if 'Value' in df_fit.columns else '값'
+                    if p_col in df_fit.columns and v_col in df_fit.columns:
+                        params = dict(zip(df_fit[p_col], df_fit[v_col]))
+                        def _p(*keys):
+                            for k in keys:
+                                f = next((x for x in params if k.lower() in str(x).lower()), None)
+                                if f is not None:
+                                    return params[f]
+                            return None
+                        vmax, km, r2 = _p('Vmax'), _p('Km'), _p('R²', 'R2', 'R_squared')
+                        slope, intercept = _p('Slope'), _p('Intercept')
+                        try:
+                            vmax = float(vmax) if vmax is not None else None
+                            km = float(km) if km is not None else None
+                        except (TypeError, ValueError):
+                            vmax, km = None, None
+                        if vmax is not None and km is not None:
+                            mm_fit = {'Vmax': vmax, 'Km': km, 'R_squared': float(r2) if r2 is not None else None, 'fit_success': True,
+                                      'experiment_type': 'Substrate Concentration Variation (Standard Michaelis-Menten)',
+                                      'equation': f'v₀ = {vmax:.2f}[S] / ({km:.2f} + [S])'}
+                            st.session_state['mm_fit_from_file'] = mm_fit
+                            break
+                        if slope is not None:
+                            mm_fit = {'slope': float(slope), 'intercept': float(intercept) if intercept is not None else 0,
+                                      'R_squared': float(r2) if r2 is not None else None, 'fit_success': True,
+                                      'experiment_type': 'Enzyme Concentration Variation (Fixed substrate)',
+                                      'equation': f'v₀ = {float(slope):.4f}[E] + {float(intercept) if intercept else 0:.4f}'}
+                            st.session_state['mm_fit_from_file'] = mm_fit
+                            break
+                except Exception:
+                    continue
+                break
+
+        if v0_data is None or mm_fit is None:
+            if 'sample_v0_data' not in st.session_state:
+                st.session_state['sample_v0_data'] = {'concentrations': [0.31, 0.63, 1.25, 2.5, 5.0], 'v0_values': [16000., 25800., 35500., 30000., 35200.]}
+                st.session_state['sample_mm_fit'] = {'slope': 2808.79, 'intercept': 23046.9, 'R_squared': 0.4266, 'fit_success': True,
+                    'experiment_type': 'Enzyme Concentration Variation (Fixed substrate)', 'equation': 'v₀ = 2808.7897[E] + 23046.8969'}
+            v0_data = st.session_state.get('sample_v0_data')
+            mm_fit = st.session_state.get('sample_mm_fit')
+            if v0_data and mm_fit:
+                st.caption("📌 Showing **example sample data** (Enzyme concentration variation). Run Data Load Mode or load a result file for your own data.")
+
+        # 4. 파일에서 정규화 결과 읽기 (Normalization Results 시트 또는 MM Results 시트)
         if norm_results_data is None:
             xlsx_path_for_norm = None
             if uploaded_file is not None:
@@ -850,26 +1013,27 @@ def general_analysis_mode(st):
     
     with tab_alpha:
         st.subheader("📈 Alpha (α) Calculation")
-        
-        st.markdown("""
-        **What is Alpha (α)?**
-        Normalized cleavage ratio, ranging from 0 (no cleavage) to 1 (full cleavage).
-        
-        **Formula**: α(t) = (F(t) - F₀) / (Fmax - F₀)
-        - **F(t)**: Fluorescence at time t
-          - With Data Load Mode results: interpolated values from the normalization exponential curve (RFU_Interpolated)
-          - Direct calculation: raw fluorescence from the data
-        - **F₀**: Initial fluorescence
-          - If available from Data Load Mode: F0 from interpolated values (MM Results sheet)
-          - Otherwise: minimum fluorescence per concentration (min(F))
-        - **Fmax**: Maximum fluorescence
-          - If available from Data Load Mode: Fmax from interpolated values (MM Results sheet)
-          - Otherwise: Region-based normalization
-            1. If a plateau region exists: mean fluorescence of the plateau (mean(F_plateau))
-            2. If sufficient exponential rise (≥3 points): F∞ from exponential fit (F(t) = F₀ + A·(1 - e^(-k·t)), Fmax = F₀ + A)
-            3. Otherwise: maximum fluorescence (max(F))
-        """)
-        
+
+        with st.expander("📖 What is Alpha (α)? — definition and formula", expanded=False):
+            st.markdown("""
+            **What is Alpha (α)?**
+            Normalized cleavage ratio, ranging from 0 (no cleavage) to 1 (full cleavage).
+
+            **Formula**: α(t) = (F(t) - F₀) / (Fmax - F₀)
+            - **F(t)**: Fluorescence at time t
+              - With Data Load Mode results: interpolated values from the normalization exponential curve (RFU_Interpolated)
+              - Direct calculation: raw fluorescence from the data
+            - **F₀**: Initial fluorescence
+              - If available from Data Load Mode: F0 from interpolated values (MM Results sheet)
+              - Otherwise: minimum fluorescence per concentration (min(F))
+            - **Fmax**: Maximum fluorescence
+              - If available from Data Load Mode: Fmax from interpolated values (MM Results sheet)
+              - Otherwise: Region-based normalization
+                1. If a plateau region exists: mean fluorescence of the plateau (mean(F_plateau))
+                2. If sufficient exponential rise (≥3 points): F∞ from exponential fit (F(t) = F₀ + A·(1 - e^(-k·t)), Fmax = F₀ + A)
+                3. Otherwise: maximum fluorescence (max(F))
+            """)
+
         # Check if alpha column exists
         if 'alpha' not in df.columns:
             st.error("❌ Alpha was not computed. Data normalization is required.")
@@ -902,11 +1066,8 @@ def general_analysis_mode(st):
                     subset = df[df[conc_col] == conc]
                     alpha_stats.append({
                         f'Concentration ({conc_unit})': conc,
-                        'Alpha min': f"{subset['alpha'].min():.4f}",
-                        'Alpha max': f"{subset['alpha'].max():.4f}",
                         'Alpha mean': f"{subset['alpha'].mean():.4f}",
-                        'Alpha std': f"{subset['alpha'].std():.4f}",
-                        'Data points': len(subset)
+                        'Alpha std': f"{subset['alpha'].std():.4f}"
                     })
                 
                 st.dataframe(pd.DataFrame(alpha_stats), use_container_width=True, hide_index=True)
@@ -964,8 +1125,7 @@ def general_analysis_mode(st):
                         'F₀ (initial)': f"{df_F0:.2f}",
                         'Fmax (max)': f"{df_Fmax:.2f}",
                         'Fmax method': fmax_method,
-                        'Source': source_info,
-                        'Alpha range': f"{subset['alpha'].min():.3f} - {subset['alpha'].max():.3f}"
+                        'Source': source_info
                     })
                 
                 st.dataframe(pd.DataFrame(f0_fmax_data), use_container_width=True, hide_index=True)
@@ -1022,38 +1182,229 @@ def general_analysis_mode(st):
                 mime="text/csv",
                 help="CSV with time, concentration, alpha, F0, Fmax"
             )
+
+    with tab_evsalpha:
+        st.subheader("📊 [E] vs α Plot")
+        st.markdown("Enzyme concentration [E] vs cleavage fraction α (α mean per concentration with fit).")
+        # 데이터 소스 표시 (로드된 데이터에 따라 플롯이 바뀌는지 확인용)
+        if st.session_state.get('mm_data_ready') and st.session_state.get('interpolation_results'):
+            st.caption("📌 Data source: **Data Load result (in memory)** — change raw data in Data Load and run again to update this plot.")
+        elif st.session_state.get('data_source_type'):
+            st.caption(f"📌 Data source: **{st.session_state.get('data_source_type', 'File')}**")
+        if 'alpha' not in df.columns:
+            st.info("ℹ️ Compute alpha in the **Alpha Calculation** tab first.")
+        else:
+            conc_col_ev = 'enzyme_ugml' if 'enzyme_ugml' in df.columns else (df['conc_col_name'].iloc[0] if 'conc_col_name' in df.columns else None)
+            if conc_col_ev is None:
+                st.warning("No concentration column found.")
+            else:
+                agg = df.groupby(conc_col_ev)['alpha'].agg(['max', 'mean', 'min']).reset_index()
+                agg = agg.rename(columns={'max': 'α max', 'mean': 'α mean', 'min': 'α min'})
+                x_label = f"[E] ({conc_unit})"
+                x_ev = agg[conc_col_ev].values.astype(float)
+                y_mean = agg['α mean'].values.astype(float)
+                n_pts = len(x_ev)
+                ss_tot = np.sum((y_mean - np.mean(y_mean)) ** 2) if n_pts > 1 else 1.0
+                fig_ev = go.Figure()
+                # α mean only (no α max)
+                fig_ev.add_trace(go.Scatter(
+                    x=x_ev,
+                    y=y_mean,
+                    mode='markers',
+                    name='α mean',
+                    marker=dict(size=10, color='#ff7f0e', symbol='diamond')
+                ))
+                x_smooth = np.linspace(0, max(x_ev) * 1.05, 200)
+                fit_results = []  # (name, R², AIC, params_text, y_fit, color, dash)
+                # 1) Exponential: α = α_max (1 - e^{-k[E]})
+                def _exp_sat(E, a_max, k):
+                    return a_max * (1 - np.exp(-k * np.maximum(E, 0)))
+                try:
+                    p0 = (float(np.max(y_mean)), 1.0)
+                    bounds = ([0.001, 0.001], [2.0, 1e4])
+                    popt, _ = curve_fit(_exp_sat, x_ev, y_mean, p0=p0, bounds=bounds, maxfev=5000)
+                    a_max, k = float(popt[0]), float(popt[1])
+                    y_exp = _exp_sat(x_smooth, a_max, k)
+                    ss_res = np.sum((y_mean - _exp_sat(x_ev, a_max, k)) ** 2)
+                    r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+                    aic = n_pts * np.log(ss_res / n_pts + 1e-12) + 2 * 2 if n_pts > 0 else 0
+                    fit_results.append((
+                        'Exponential',
+                        r2, aic,
+                        f'α_max = {a_max:.4f}, k = {k:.4f}',
+                        y_exp, '#2ca02c', 'dash'
+                    ))
+                except Exception:
+                    pass
+                # 2) Hyperbolic (MM-type): α = α_max [E] / (K_half + [E])
+                def _hyp_sat(E, a_max, K_half):
+                    E_safe = np.maximum(E, 0)
+                    return a_max * E_safe / (K_half + E_safe + 1e-12)
+                try:
+                    p0 = (float(np.max(y_mean)), 0.5 * (np.max(x_ev) or 1))
+                    bounds = ([0.001, 0.001], [2.0, 1e4])
+                    popt, _ = curve_fit(_hyp_sat, x_ev, y_mean, p0=p0, bounds=bounds, maxfev=5000)
+                    a_max, K_half = float(popt[0]), float(popt[1])
+                    y_hyp = _hyp_sat(x_smooth, a_max, K_half)
+                    ss_res = np.sum((y_mean - _hyp_sat(x_ev, a_max, K_half)) ** 2)
+                    r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+                    aic = n_pts * np.log(ss_res / n_pts + 1e-12) + 2 * 2 if n_pts > 0 else 0
+                    fit_results.append((
+                        'Hyperbolic (MM)',
+                        r2, aic,
+                        f'α_max = {a_max:.4f}, K_half = {K_half:.4f}',
+                        y_hyp, '#9467bd', 'dot'
+                    ))
+                except Exception:
+                    pass
+                for name, r2, aic, params_text, y_fit, color, dash in fit_results:
+                    label = f'{name}: R²={r2:.4f}'
+                    fig_ev.add_trace(go.Scatter(
+                        x=x_smooth,
+                        y=y_fit,
+                        mode='lines',
+                        name=label,
+                        line=dict(width=2, color=color, dash=dash)
+                    ))
+                fig_ev.update_layout(
+                    title='α vs [E] (Enzyme Concentration)',
+                    xaxis_title=x_label,
+                    yaxis_title='α (cleavage fraction)',
+                    template='plotly_white',
+                    height=500,
+                    hovermode='x unified',
+                    legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+                )
+                st.plotly_chart(fig_ev, use_container_width=True)
+                if fit_results:
+                    st.markdown("**Fit models**")
+                    st.latex(r"\text{Exponential: } \alpha = \alpha_{max}(1 - e^{-k[E]}) \quad \text{Hyperbolic: } \alpha = \frac{\alpha_{max}[E]}{K_{half}+[E]}")
+                    for name, r2, aic, params_text, _, _, _ in fit_results:
+                        st.caption(f"**{name}**: {params_text} → R² = {r2:.4f}, AIC = {aic:.2f}")
+                    if len(fit_results) == 2:
+                        aic_exp, aic_hyp = fit_results[0][2], fit_results[1][2]
+                        if aic_exp < aic_hyp:
+                            st.caption("Lower AIC → **Exponential** fits slightly better.")
+                        elif aic_hyp < aic_exp:
+                            st.caption("Lower AIC → **Hyperbolic** fits slightly better.")
+                        else:
+                            st.caption("Similar AIC → choose by interpretation (K_half = half-saturation [E] for Hyperbolic).")
+                with st.expander("📋 [E] vs α data", expanded=False):
+                    st.dataframe(agg, use_container_width=True, hide_index=True)
     
     with tab2:
         st.subheader("🔬 Global Model Fitting")
         
-        st.markdown("""
-        **Basic models (A–C)**: Classical enzyme kinetics  
-        **Extended models (D–F)**: Fmax concentration dependence (gel penetration, product inhibition, enzyme adsorption)
-        """)
+        with st.expander("📚 Kinetic Model Description", expanded=False):
+            st.markdown(r"""
+            This simulator provides six kinetic models for analyzing peptide substrate–enzyme reactions.
+
+            #### 1. Basic Models (A–C)
+            Based on classical enzyme kinetics; Fmax is assumed independent of enzyme concentration.
+
+            **📌 Model A: Substrate Depletion**
+            - **Overview**: First-order reaction; rate decreases as substrate [S] is consumed.
+            - **Equations**:
+              $$ \alpha(t) = 1 - e^{-k_{obs} \cdot t} $$
+              $$ k_{obs} = \frac{k_{cat}}{K_M} \cdot [E] $$
+            - **Parameters**:
+              - $k_{cat}/K_M$: Catalytic efficiency ($M^{-1}s^{-1}$)
+            - **Notes**:
+              - At low [E], initial rate v₀ is linear in [E].
+              - At long times, all substrate is cleaved and α → 1.
+
+            **📌 Model B: Enzyme Deactivation**
+            - **Overview**: Enzyme gradually loses activity during the reaction.
+            - **Equations**:
+              Enzyme concentration decays exponentially: $[E]_t = [E]_0 \cdot e^{-k_d t}$
+              $$ \alpha(t) = 1 - \exp\left[-\frac{k_{cat}/K_M \cdot [E]_0}{k_d} (1 - e^{-k_d t})\right] $$
+            - **Parameters**:
+              - $k_{cat}/K_M$: Catalytic efficiency ($M^{-1}s^{-1}$)
+              - $k_d$: Deactivation rate constant ($s^{-1}$)
+            - **Notes**: Curve plateaus earlier than expected; reaction can stop with substrate left ($\alpha_{\infty} < 1$).
+
+            **📌 Model C: Mass Transfer Limitation**
+            - **Overview**: Diffusion of enzyme to the substrate surface is slower than the reaction.
+            - **Equations**:
+              Surface enzyme concentration $[E]_s$ is lower than bulk $[E]_b$
+              $$ [E]_s \approx \frac{[E]_b}{1 + Da}, \quad Da = \frac{k_{cat} \Gamma_0}{K_M k_m} $$
+              $$ \alpha(t) = 1 - e^{-k_{obs} \cdot t}, \quad k_{obs} = \frac{k_{cat}}{K_M} [E]_s $$
+            - **Parameters**:
+              - $k_{cat}/K_M$: Catalytic efficiency
+              - $k_m$: Mass transfer coefficient ($m/s$)
+              - $\Gamma_0$: Initial surface substrate density ($pmol/cm^2$)
+            - **Notes**: At high [E], rate saturates due to diffusion limit.
+
+            ---
+
+            #### 2. Extended Models (D–F)
+            Fmax (maximum fluorescence) depends on [E]; for more complex surface reactions.
+
+            **📌 Model D: Concentration-Dependent Fmax**
+            - **Overview**: Higher [E] allows access to more substrate (e.g. deeper gel penetration).
+            - **Equations**:
+              Maximum cleavage $\alpha_{max}$ depends on [E]
+              $$ \alpha(t) = \alpha_{max}([E]) \cdot (1 - e^{-k_{obs} t}) $$
+              $$ \alpha_{max}([E]) = \alpha_{\infty} \cdot (1 - e^{-k_{access} [E]}) $$
+            - **Parameters**:
+              - $k_{cat}/K_M$: Catalytic efficiency
+              - $\alpha_{\infty}$: Theoretical maximum cleavage
+              - $k_{access}$: Accessibility coefficient ($M^{-1}$)
+            - **Notes**: At low [E] only surface is cleaved; at high [E], Fmax increases.
+
+            **📌 Model E: Product Inhibition**
+            - **Overview**: Reaction product binds the active site and inhibits the enzyme.
+            - **Equations**:
+              Competitive inhibition
+              $$ \frac{d\alpha}{dt} = \frac{k_{obs}(1-\alpha)}{1 + K_{i,eff}\alpha} $$
+            - **Parameters**:
+              - $k_{cat}/K_M$: Catalytic efficiency
+              - $K_{i,eff}$: Effective inhibition constant (dimensionless, $[S]_0/K_i$)
+            - **Notes**: Rate drops sharply in the later phase.
+
+            **📌 Model F: Enzyme Surface Sequestration**
+            - **Overview**: Enzyme is irreversibly adsorbed to the surface or gel and unavailable for reaction.
+            - **Equations**:
+              Enzyme depleted by surface adsorption ($k_{ads}$)
+              $$ \alpha(t) \approx \frac{(k_{cat}/K_M)[E]}{k_{ads}(1+K_{ads}[E])} (1 - e^{-k_{ads} t}) $$
+            - **Parameters**:
+              - $k_{cat}/K_M$: Catalytic efficiency
+              - $k_{ads}$: Adsorption rate constant ($s^{-1}$)
+              - $K_{ads}$: Adsorption equilibrium constant ($M^{-1}$)
+            - **Notes**: Reactivity can be lower than expected even at high [E].
+
+            ### 📊 Model fit: AIC
+
+            **Akaike Information Criterion (AIC)**
+            Balances goodness of fit and model complexity; lower is better.
+
+            **Formula**:
+            $$ AIC = 2k - 2\ln(\hat{L}) $$
+            where:
+            - $k$: number of parameters
+            - $\hat{L}$: maximum likelihood
+
+            Here we use RSS-based:
+            $$ AIC = n \ln\left(\frac{RSS}{n}\right) + 2k + C $$
+            - $n$: number of data points
+            - $RSS$: residual sum of squares ($\sum (y_{obs} - y_{pred})^2$)
+            - $C$: constant
+
+            **Interpretation**:
+            - **ΔAIC < 2**: No significant difference between models
+            - **ΔAIC > 10**: Lower-AIC model is strongly preferred
+            """)
         
-        # Model selection
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**Basic models**")
-            fit_model_a = st.checkbox("Model A: Substrate Depletion", value=True)
-            st.caption("✓ First-order reaction & substrate depletion")
-            
-            fit_model_b = st.checkbox("Model B: Enzyme Deactivation", value=True)
-            st.caption("✓ Enzyme deactivation & time dependence")
-            
-            fit_model_c = st.checkbox("Model C: Mass Transfer Limitation", value=True)
-            st.caption("✓ Diffusion limit & accessibility")
+        st.markdown("**Basic models (A–C)**: Classical enzyme kinetics")
         
-        with col2:
-            st.markdown("**Extended models (Fmax dependence)**")
-            fit_model_d = st.checkbox("Model D: Concentration-Dependent Fmax", value=True)
-            st.caption("✓ Gel penetration depth & secondary cleavage")
-            
-            fit_model_e = st.checkbox("Model E: Product Inhibition", value=True)
-            st.caption("✓ Product accumulation & competitive inhibition")
-            
-            fit_model_f = st.checkbox("Model F: Enzyme Adsorption/Sequestration", value=True)
-            st.caption("✓ Surface adsorption & irreversible binding")
+        # Model selection — 한동안 Model A만 활성화, 나머지 B–F 숨김
+        fit_model_a = st.checkbox("Model A: Substrate Depletion", value=True)
+        st.caption("✓ First-order reaction & substrate depletion")
+        fit_model_b = False
+        fit_model_c = False
+        fit_model_d = False
+        fit_model_e = False
+        fit_model_f = False
         
         if st.button("🚀 Run Global Fitting", type="primary"):
             # 데이터 상태 확인 및 검증
@@ -1192,107 +1543,6 @@ def general_analysis_mode(st):
             with result_container:
                 st.success("🎉 All model fitting complete! Check results in the 'Model Comparison' tab.")
     
-    with tab_desc:
-        st.subheader("📚 Kinetic Model Description")
-        st.markdown(r"""
-        This simulator provides six kinetic models for analyzing peptide substrate–enzyme reactions.
-        
-        #### 1. Basic Models (A–C)
-        Based on classical enzyme kinetics; Fmax is assumed independent of enzyme concentration.
-
-        **📌 Model A: Substrate Depletion**
-        - **Overview**: First-order reaction; rate decreases as substrate [S] is consumed.
-        - **Equations**:
-          $$ \alpha(t) = 1 - e^{-k_{obs} \cdot t} $$
-          $$ k_{obs} = \frac{k_{cat}}{K_M} \cdot [E] $$
-        - **Parameters**:
-          - $k_{cat}/K_M$: Catalytic efficiency ($M^{-1}s^{-1}$)
-        - **Notes**: 
-          - At low [E], initial rate v₀ is linear in [E].
-          - At long times, all substrate is cleaved and α → 1.
-
-        **📌 Model B: Enzyme Deactivation**
-        - **Overview**: Enzyme gradually loses activity during the reaction.
-        - **Equations**:
-          Enzyme concentration decays exponentially: $[E]_t = [E]_0 \cdot e^{-k_d t}$
-          $$ \alpha(t) = 1 - \exp\left[-\frac{k_{cat}/K_M \cdot [E]_0}{k_d} (1 - e^{-k_d t})\right] $$
-        - **Parameters**:
-          - $k_{cat}/K_M$: Catalytic efficiency ($M^{-1}s^{-1}$)
-          - $k_d$: Deactivation rate constant ($s^{-1}$)
-        - **Notes**: Curve plateaus earlier than expected; reaction can stop with substrate left ($\alpha_{\infty} < 1$).
-
-        **📌 Model C: Mass Transfer Limitation**
-        - **Overview**: Diffusion of enzyme to the substrate surface is slower than the reaction.
-        - **Equations**:
-          Surface enzyme concentration $[E]_s$ is lower than bulk $[E]_b$
-          $$ [E]_s \approx \frac{[E]_b}{1 + Da}, \quad Da = \frac{k_{cat} \Gamma_0}{K_M k_m} $$
-          $$ \alpha(t) = 1 - e^{-k_{obs} \cdot t}, \quad k_{obs} = \frac{k_{cat}}{K_M} [E]_s $$
-        - **Parameters**:
-          - $k_{cat}/K_M$: Catalytic efficiency
-          - $k_m$: Mass transfer coefficient ($m/s$)
-          - $\Gamma_0$: Initial surface substrate density ($pmol/cm^2$)
-        - **Notes**: At high [E], rate saturates due to diffusion limit.
-
-        ---
-
-        #### 2. Extended Models (D–F)
-        Fmax (maximum fluorescence) depends on [E]; for more complex surface reactions.
-
-        **📌 Model D: Concentration-Dependent Fmax**
-        - **Overview**: Higher [E] allows access to more substrate (e.g. deeper gel penetration).
-        - **Equations**:
-          Maximum cleavage $\alpha_{max}$ depends on [E]
-          $$ \alpha(t) = \alpha_{max}([E]) \cdot (1 - e^{-k_{obs} t}) $$
-          $$ \alpha_{max}([E]) = \alpha_{\infty} \cdot (1 - e^{-k_{access} [E]}) $$
-        - **Parameters**:
-          - $k_{cat}/K_M$: Catalytic efficiency
-          - $\alpha_{\infty}$: Theoretical maximum cleavage
-          - $k_{access}$: Accessibility coefficient ($M^{-1}$)
-        - **Notes**: At low [E] only surface is cleaved; at high [E], Fmax increases.
-
-        **📌 Model E: Product Inhibition**
-        - **Overview**: Reaction product binds the active site and inhibits the enzyme.
-        - **Equations**:
-          Competitive inhibition
-          $$ \frac{d\alpha}{dt} = \frac{k_{obs}(1-\alpha)}{1 + K_{i,eff}\alpha} $$
-        - **Parameters**:
-          - $k_{cat}/K_M$: Catalytic efficiency
-          - $K_{i,eff}$: Effective inhibition constant (dimensionless, $[S]_0/K_i$)
-        - **Notes**: Rate drops sharply in the later phase.
-
-        **📌 Model F: Enzyme Surface Sequestration**
-        - **Overview**: Enzyme is irreversibly adsorbed to the surface or gel and unavailable for reaction.
-        - **Equations**:
-          Enzyme depleted by surface adsorption ($k_{ads}$)
-          $$ \alpha(t) \approx \frac{(k_{cat}/K_M)[E]}{k_{ads}(1+K_{ads}[E])} (1 - e^{-k_{ads} t}) $$
-        - **Parameters**:
-          - $k_{cat}/K_M$: Catalytic efficiency
-          - $k_{ads}$: Adsorption rate constant ($s^{-1}$)
-          - $K_{ads}$: Adsorption equilibrium constant ($M^{-1}$)
-        - **Notes**: Reactivity can be lower than expected even at high [E].
-          
-        ### 📊 Model fit: AIC
-
-        **Akaike Information Criterion (AIC)**  
-        Balances goodness of fit and model complexity; lower is better.
-
-        **Formula**:
-        $$ AIC = 2k - 2\ln(\hat{L}) $$
-        where:
-        - $k$: number of parameters
-        - $\hat{L}$: maximum likelihood
-
-        Here we use RSS-based:
-        $$ AIC = n \ln\left(\frac{RSS}{n}\right) + 2k + C $$
-        - $n$: number of data points
-        - $RSS$: residual sum of squares ($\sum (y_{obs} - y_{pred})^2$)
-        - $C$: constant
-
-        **Interpretation**:
-        - **ΔAIC < 2**: No significant difference between models
-        - **ΔAIC > 10**: Lower-AIC model is strongly preferred
-        """)
-
     with tab3:
         if 'fit_results' in st.session_state:
             results = st.session_state['fit_results']

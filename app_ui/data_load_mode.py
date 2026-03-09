@@ -14,6 +14,48 @@ def _debug_log(msg: str) -> None:
     except Exception:
         pass
 
+
+# Known enzyme molecular weights (kDa) for raw_* filename convention
+_KNOWN_ENZYME_MW = {"RgpA": 56.0, "RgpB": 43.3}
+
+
+def _parse_filename_for_model_simulation(filename: str):
+    """
+    Parse CSV/XLSX filename to extract Enzyme Name, MW (kDa), Substrate Name.
+    - raw_*.ext: * is enzyme name (e.g. raw_RgpA.csv → RgpA); MW from _KNOWN_ENZYME_MW if present.
+    - EnzymeName_MW_SubstrateName.ext: (e.g. RgpA_56.60_Dabcyl-HEK-K(FITC).csv)
+    Returns (enzyme_name, mw_float or None, substrate_name).
+    """
+    if not filename or not isinstance(filename, str):
+        return None, None, None
+    base = os.path.splitext(filename.strip())[0]
+    # Data Load convention: raw_* → * is enzyme name; use known MW for RgpA, RgpB, etc.
+    if base.lower().startswith('raw_') and len(base) > 4:
+        enzyme_name = base[4:].strip()
+        mw = _KNOWN_ENZYME_MW.get(enzyme_name)
+        return enzyme_name, mw, None
+    parts = base.split('_')
+    enzyme_name = None
+    mw = None
+    substrate_name = None
+    if len(parts) >= 3:
+        enzyme_name = parts[0].strip() or None
+        try:
+            mw = float(parts[1].strip())
+        except (ValueError, TypeError):
+            pass
+        substrate_name = '_'.join(parts[2:]).strip() or None
+    elif len(parts) == 2:
+        enzyme_name = parts[0].strip() or None
+        try:
+            mw = float(parts[1].strip())
+        except (ValueError, TypeError):
+            pass
+    elif len(parts) == 1 and parts[0].strip():
+        enzyme_name = parts[0].strip()
+    return enzyme_name, mw, substrate_name
+
+
 _debug_log("module load: starting")
 
 # 프로젝트 루트를 path에 추가 (mode_prep_raw_data, data_interpolation_mode 등 import 위해)
@@ -800,6 +842,19 @@ _EXPORT_PNG_HEIGHT = 600
 _EXPORT_PNG_SCALE = 2
 
 
+def _apply_display_layout_like_export(fig):
+    """Data Load 화면 플롯을 Export PNG와 동일한 서식(크기·제목·축·그리드)으로 맞춤. 범례/주석은 유지."""
+    fig = go.Figure(fig)
+    fig.update_layout(
+        width=_EXPORT_PNG_WIDTH,
+        height=_EXPORT_PNG_HEIGHT,
+        title=dict(x=0.5, xanchor="center"),
+    )
+    fig.update_xaxes(showgrid=False, showline=True, mirror=True, ticks="outside", zeroline=False)
+    fig.update_yaxes(showgrid=False, showline=True, mirror=True, ticks="outside", zeroline=False)
+    return fig
+
+
 def _apply_export_layout(fig, plot_name=None, width=None, height=None):
     """로컬/배포 동일 서식 적용. width/height 미지정 시 _EXPORT_PNG_* 사용."""
     w = width if width is not None else _EXPORT_PNG_WIDTH
@@ -1207,8 +1262,8 @@ def data_load_mode(st):
     st.sidebar.subheader("🔬 Experiment Condition")
     experiment_type = st.sidebar.radio(
         "Experiment Type",
-        ["Substrate Concentration Variation (Standard Michaelis-Menten)", "Enzyme Concentration Variation (Fixed substrate)"],
-        help="Substrate Concentration Variation: Standard Michaelis-Menten applicable | Enzyme Concentration Variation: linear relationship (fixed substrate)"
+        ["Enzyme Concentration Variation (Fixed substrate)", "Substrate Concentration Variation (Standard Michaelis-Menten)"],
+        help="Enzyme Concentration Variation: linear relationship (fixed substrate) | Substrate Concentration Variation: Standard Michaelis-Menten applicable"
     )
     
     # Determine sample file path based on experiment type
@@ -1579,7 +1634,7 @@ def data_load_mode(st):
                         mm_fit_success = False
                 
                 else:  # Enzyme Concentration Variation (Fixed substrate)
-                    status_text.text("4️⃣ Fitting v₀ vs [E] linear... (not standard MM)")
+                    status_text.text("4️⃣ Fitting v₀ vs [E] linear... (not standard Michaelis-Menten)")
                     
                     # 농도와 초기 속도 데이터 수집
                     concentrations = [params['concentration'] for params in sorted(mm_results.values(), 
@@ -1938,6 +1993,11 @@ def data_load_mode(st):
                 status_text.text("✅ Michaelis-Menten model fitting and normalization complete!")
                 
             # Session state에 저장 (정규화 기반 v0 사용)
+            # Data Preview와 동일한 값 저장 → Model Simulation에서 그대로 표시
+            sorted_conc_for_meta = sorted(raw_data.items(), key=lambda x: x[1]['concentration'])
+            data_points_per_conc = len(sorted_conc_for_meta[0][1]['time']) if sorted_conc_for_meta else 0
+            all_times_meta = [t for data in raw_data.values() for t in data['time']]
+            reaction_time_max_min = max(all_times_meta) if all_times_meta else None
             st.session_state['interpolation_results'] = {
                 'interp_df': interp_df,
                 'mm_results_df': mm_results_df,
@@ -1954,7 +2014,10 @@ def data_load_mode(st):
                 },
                 'experiment_type': experiment_type,
                 'normalization_results': normalization_results,  # 정규화 결과 추가
-                'uploaded_filename': os.path.basename(uploaded_file.name) if uploaded_file is not None else None  # 다운로드 파일명용 (경로 제외)
+                'uploaded_filename': os.path.basename(uploaded_file.name) if uploaded_file is not None else None,  # 다운로드 파일명용 (경로 제외)
+                'data_points_per_concentration': data_points_per_conc,
+                'reaction_time_max_min': reaction_time_max_min,
+                'n_replicates': n_value,
             }
             # Export Plots 캐시 무효화: 결과가 바뀌면 ZIP용 PNG를 Export 탭에서 다시 렌더링
             st.session_state['export_cache_version'] = time.time()
@@ -1962,6 +2025,21 @@ def data_load_mode(st):
 
             # 결과 적용 플래그 설정
             st.session_state['mm_data_ready'] = True
+
+            # Model Simulation 모드에서 자동 채우기: Data Load에서 사용한 파일명 파싱
+            uploaded_filename = st.session_state.get('interpolation_results', {}).get('uploaded_filename')
+            if uploaded_filename:
+                ename, mw, sname = _parse_filename_for_model_simulation(uploaded_filename)
+                if ename is not None:
+                    st.session_state['parsed_enzyme_name'] = ename
+                    st.session_state['model_sim_enzyme_name'] = ename
+                if mw is not None:
+                    st.session_state['parsed_enzyme_mw'] = mw
+                    st.session_state['model_sim_enzyme_mw'] = mw
+                if sname is not None:
+                    st.session_state['parsed_substrate_name'] = sname
+                    st.session_state['model_sim_substrate_name'] = sname
+                st.session_state['last_parsed_filename_for_model'] = uploaded_filename
     
     # 결과 표시
     if 'interpolation_results' in st.session_state:
@@ -1987,10 +2065,10 @@ def data_load_mode(st):
                     with col4:
                         st.metric("R²", f"{mm_fit['R_squared']:.4f}")
                     
-                    st.info(f"**MM Equation:** {mm_fit['equation']}")
+                    st.info(f"**Michaelis-Menten Equation:** {mm_fit['equation']}")
                 else:
                     # Display Enzyme concentration variation results
-                    st.warning("⚠️ **Fixed substrate + Enzyme Concentration Variation Experiment** (not standard MM)")
+                    st.warning("⚠️ **Fixed substrate + Enzyme Concentration Variation Experiment** (not standard Michaelis-Menten)")
                     
                     col1, col2, col3 = st.columns(3)
                     with col1:
@@ -2869,8 +2947,8 @@ def data_load_mode(st):
                 else:
                     st.info("No normalization results. Please run the 'Run Michaelis-Menten Model' button first.")
             
-            # Tab 2: v₀ vs 농도 그래프 (실험 조건에 따라 다름)
-            v0_tab_idx = 2 if exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)" else 2
+            # Tab 2: v₀ vs concentration fit (Model fitting; experiment type dependent)
+            v0_tab_idx = 2
             if selected_tab == tab_titles[v0_tab_idx]:
                 if 'v0_vs_concentration' in results and 'mm_fit_results' in results:
                     v0_data = results['v0_vs_concentration']
@@ -2930,9 +3008,9 @@ def data_load_mode(st):
                                 xanchor='left', yanchor='top',
                                 text=stats_text,
                                 showarrow=False,
-                                bgcolor="rgba(0,0,0,0)",
-                                bordercolor="rgba(0,0,0,0)",
-                                borderwidth=0,
+                                bgcolor="rgba(255,255,255,0.9)",
+                                bordercolor="rgba(0,0,0,0.2)",
+                                borderwidth=1,
                                 font=dict(size=11)
                             )
                         
@@ -2945,7 +3023,7 @@ def data_load_mode(st):
                             hovermode='x unified',
                             xaxis=dict(showline=True, mirror=True, ticks='outside'),
                             yaxis=dict(showline=True, mirror=True, ticks='outside'),
-                            legend=dict(orientation='v', x=0.02, y=0.98, xanchor='left', yanchor='top', bgcolor='rgba(255,255,255,0.85)')
+                            legend=dict(orientation='v', x=0.98, y=0.98, xanchor='right', yanchor='top', bgcolor='rgba(255,255,255,0.9)')
                         )
                     else:
                         st.subheader("v₀ vs [E] Linear Fit (Constant Substrate)")
@@ -2983,24 +3061,6 @@ def data_load_mode(st):
                                 name=line_name,
                                 line=dict(width=2.5, color='blue', dash='dash')
                             ))
-                            
-                            # 통계 정보
-                            stats_text = f"Slope = {slope:.4f}<br>"
-                            stats_text += f"Intercept = {intercept:.4f}<br>"
-                            stats_text += f"R² = {mm_fit['R_squared']:.4f}<br>"
-                            stats_text += "<br><b>⚠️ Cannot calculate Km</b>"
-                            
-                            fig_v0.add_annotation(
-                                xref="paper", yref="paper",
-                                x=0.05, y=0.95,
-                                xanchor='left', yanchor='top',
-                                text=stats_text,
-                                showarrow=False,
-                                bgcolor="rgba(0,0,0,0)",
-                                bordercolor="rgba(0,0,0,0)",
-                                borderwidth=0,
-                                font=dict(size=11)
-                            )
                         
                         fig_v0.update_layout(
                             title='Initial Velocity (v₀) vs Enzyme Concentration [E] (Constant Substrate)',
@@ -3011,15 +3071,15 @@ def data_load_mode(st):
                             hovermode='x unified',
                             xaxis=dict(showline=True, mirror=True, ticks='outside'),
                             yaxis=dict(showline=True, mirror=True, ticks='outside'),
-                            legend=dict(orientation='v', x=0.02, y=0.98, xanchor='left', yanchor='top', bgcolor='rgba(255,255,255,0.85)')
+                            legend=dict(orientation='v', x=0.02, y=0.98, xanchor='left', yanchor='top', bgcolor='rgba(255,255,255,0.9)')
                         )
-                    
+                    fig_v0 = _apply_display_layout_like_export(fig_v0)
                     st.plotly_chart(fig_v0, use_container_width=True)
                 else:
                     st.warning("No v₀ vs concentration data available.")
             
-            # 마지막에서 두 번째 탭: 데이터 테이블
-            data_tab_idx = 3 if exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)" else 3
+            # Data Table tab
+            data_tab_idx = 3
             if selected_tab == tab_titles[data_tab_idx]:
                 # 상세 파라미터 테이블용 데이터 먼저 구성 (엑셀 버튼·테이블 공용)
                 detail_df = None
@@ -3249,7 +3309,7 @@ def data_load_mode(st):
                 else:
                     st.warning("No Michaelis-Menten fit results available.")
 
-            # 마지막 탭: Export Plots
+            # Export Plots tab
             export_tab_idx = 4
             if selected_tab == tab_titles[export_tab_idx]:
                 st.subheader("📤 Export Plots")

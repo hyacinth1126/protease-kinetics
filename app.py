@@ -54,6 +54,11 @@ def main():
         layout="wide"
     )
     _cloud_log("main(): set_page_config done")
+    # 테마를 Light로 고정했으므로 설정 메뉴(테마 선택) 숨김
+    st.markdown(
+        "<style>#MainMenu { visibility: hidden; }</style>",
+        unsafe_allow_html=True,
+    )
     st.title("🔬  FRET Protease Simulation")
     st.markdown("---")
     

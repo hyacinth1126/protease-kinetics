@@ -1,9 +1,13 @@
 # Protease Simulator 3
 
+단백질 분해 효소(Protease) 반응 시뮬레이션 및 데이터 분석 도구입니다.
+
+---
+
 ## 빠른 실행 (venv)
 
 이 프로젝트는 가상환경(venv) 사용을 권장합니다. 다른 프로젝트와 패키지 충돌을 피할 수 있습니다.
- 
+
 **1. venv 활성화 (PowerShell)**
 
 ```powershell
@@ -36,7 +40,7 @@ streamlit run app.py
 ```bash
 # 처음 받을 때
 git clone <저장소-URL>
-cd 6-protease-simulator-3
+cd protease-simulator-3
 
 # 이미 클론한 뒤 최신만 받을 때
 git pull
@@ -73,6 +77,12 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
+Windows에서 `UnicodeDecodeError`(한글 주석 등)가 나면 UTF-8로 읽도록 설정한 뒤 다시 시도하세요.
+
+```powershell
+$env:PYTHONUTF8=1; pip install -r requirements.txt
+```
+
 **5. 앱 실행**
 
 ```bash
@@ -80,6 +90,20 @@ streamlit run app.py
 ```
 
 이후에는 이 PC에서도 **빠른 실행 (venv)** 절의 1–3단계(활성화 → 실행 → 종료)만 반복하면 됩니다.
+
+---
+
+## 문제 해결 (Troubleshooting)
+
+- **"Fatal error in launcher: Unable to create process using '...python.exe'"**  
+  프로젝트를 옮기거나 폴더 이름을 바꾼 경우, venv 안의 실행 경로가 예전 위치를 가리켜 발생합니다. **기존 venv를 삭제하고 현재 경로에서 venv를 다시 만드세요.**
+
+  ```powershell
+  Remove-Item -Recurse -Force .\venv
+  python -m venv venv
+  .\venv\Scripts\Activate.ps1
+  pip install -r requirements.txt
+  ```
 
 ---
 
@@ -98,10 +122,6 @@ streamlit run app.py
   4. **Export plots 탭에서 PNG 다운로드**  
      로컬에서는 Kaleido(Chrome 설치 또는 `plotly_get_chrome`) 또는 Playwright 폴백으로 PNG 저장이 됩니다. **Streamlit Cloud**에서는 apt 의존성(`packages.txt`) 추가 시 빌드가 실패하는 이슈가 있어, Cloud에서는 PNG 내보내기가 되지 않을 수 있습니다. 필요한 경우 화면 캡처를 사용하거나 로컬에서 실행해 PNG를 받으세요.
 - 로컬에서는 `streamlit run app.py` 만 실행하면 됩니다.
-
----
-
-단백질 분해 효소(Protease) 반응 시뮬레이션 및 데이터 분석 도구입니다.
 
 ---
 
@@ -181,21 +201,10 @@ streamlit run app.py
 
 ---
 
-## 설치 방법
+## 설치 및 실행 요약
 
-1.  Python 3.8 이상 설치  
-2.  의존성 설치:  
-    ```bash
-    pip install -r requirements.txt
-    ```
-
----
-
-## 실행 방법
-
-```bash
-python -m streamlit run app.py
-```
+- **Python**: 3.8 이상 필요.
+- **설치·실행**: 위 **다른 PC에서 셋업** 절을 참고해 venv 생성 후 `pip install -r requirements.txt`, `streamlit run app.py` 로 실행하면 됩니다.
 
 ---
 
