@@ -451,8 +451,21 @@ def _build_interpolated_curves_fig(results):
     return fig_mm
 
 
-def _build_exponential_increase_interp_fig(results):
-    """농도별 interpolated curve에서 exponential increase 구간(0 ~ 3τ)만 잘라 Time-Flu Interpolated Curves와 동일한 플롯 디자인으로 그린 figure. export/UI 공용."""
+def _build_exponential_increase_interp_fig(
+    results,
+    per_concentration_cut=True,
+    x_range_mode='min_3tau',
+    show_experimental_data=True,
+    legend_on_lines=False,
+    cut_at_x_max=False
+):
+    """농도별 interpolated curve exponential 구간 figure.
+
+    - per_concentration_cut=False: 농도별 3τ 컷 없이 표시
+    - show_experimental_data=False: raw experimental marker 숨김
+    - legend_on_lines=True: 선(trace)에 범례 표시
+    - cut_at_x_max=True: 모든 데이터/곡선을 x_max(선택된 τ 기준)까지만 표시
+    """
     interp_df = results.get('interp_df')
     norm_results = results.get('normalization_results')
     if interp_df is None or not norm_results or 'Time_min' not in interp_df.columns or 'RFU_Interpolated' not in interp_df.columns:
@@ -468,9 +481,17 @@ def _build_exponential_increase_interp_fig(results):
     colors = ['blue', 'red', 'orange', 'green', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
 
     fig_mm = go.Figure()
-    x_min_global = -0.1
-    # x_max: 농도별 t_cut(3τ) 중 최솟값에 맞춤 = 최소 x(가장 짧은 exponential 구간)를 갖는 농도
-    t_cuts = []
+    valid_t_cuts = [
+        3.0 * n_data.get('tau')
+        for n_data in norm_results.values()
+        if n_data.get('tau') is not None and not np.isinf(n_data.get('tau')) and n_data.get('tau') > 0
+    ]
+    if not valid_t_cuts:
+        return None
+    if x_range_mode == 'max_3tau':
+        x_max_global = max(valid_t_cuts)
+    else:
+        x_max_global = min(valid_t_cuts)
     all_plot_x, all_plot_y = [], []  # 범례 위치 결정용: 데이터 점 수집
     for idx, conc_name in enumerate(conc_order):
         color = colors[idx % len(colors)]
@@ -479,14 +500,17 @@ def _build_exponential_increase_interp_fig(results):
         n_data = norm_results.get(conc_name)
         tau = n_data.get('tau') if n_data else None
         t_cut = (3.0 * tau) if (tau is not None and not np.isinf(tau) and tau > 0) else None
-        if t_cut is not None:
-            t_cuts.append(t_cut)
 
-        if 'raw_data' in results and conc_name in results['raw_data']:
+        if show_experimental_data and 'raw_data' in results and conc_name in results['raw_data']:
             raw_conc_data = results['raw_data'][conc_name]
             t_raw = np.asarray(raw_conc_data['time'])
             v_raw = np.asarray(raw_conc_data['value'])
-            mask_raw = (t_raw <= t_cut) if t_cut is not None else np.ones(len(t_raw), dtype=bool)
+            if per_concentration_cut and t_cut is not None:
+                mask_raw = (t_raw <= t_cut)
+            else:
+                mask_raw = np.ones(len(t_raw), dtype=bool)
+            if cut_at_x_max:
+                mask_raw = mask_raw & (t_raw <= x_max_global)
             t_raw = t_raw[mask_raw]
             v_raw = v_raw[mask_raw]
             if len(t_raw) > 0:
@@ -499,7 +523,7 @@ def _build_exponential_increase_interp_fig(results):
                     name=legend_name,
                     marker=dict(size=8, color=color, symbol='circle', line=dict(width=1, color='white')),
                     legendgroup=conc_name,
-                    showlegend=True
+                    showlegend=(not legend_on_lines)
                 ))
                 if raw_conc_data.get('SD') is not None and exp_type == "Enzyme Concentration Variation (Fixed substrate)":
                     sd_values = np.asarray(raw_conc_data['SD'])
@@ -525,8 +549,10 @@ def _build_exponential_increase_interp_fig(results):
             curve_df = pd.DataFrame()
 
         if len(curve_df) > 0:
-            if t_cut is not None:
+            if per_concentration_cut and t_cut is not None:
                 curve_df = curve_df[curve_df['Time_min'] <= t_cut]
+            if cut_at_x_max:
+                curve_df = curve_df[curve_df['Time_min'] <= x_max_global]
             if len(curve_df) > 0:
                 fig_mm.add_trace(go.Scatter(
                     x=curve_df['Time_min'].values,
@@ -535,16 +561,13 @@ def _build_exponential_increase_interp_fig(results):
                     name=legend_name,
                     line=dict(color=color, width=2, dash='solid'),
                     legendgroup=conc_name,
-                    showlegend=False
+                    showlegend=legend_on_lines
                 ))
                 all_plot_x.extend(curve_df['Time_min'].tolist())
                 all_plot_y.extend(curve_df['RFU_Interpolated'].tolist())
-    if not t_cuts:
-        return None
-    # 최소 x(가장 짧은 3τ)를 갖는 농도에 맞춰 x_max = min(t_cut)
-    x_max_global = min(t_cuts)
-    x_margin_right = max((x_max_global - x_min_global) * 0.03, 0.05)
-    x_range = [x_min_global, x_max_global + x_margin_right]
+    x_min_data = min(all_plot_x) if all_plot_x else 0.0
+    x_margin = max((x_max_global - x_min_data) * 0.03, 0.05)
+    x_range = [x_min_data - x_margin, x_max_global + x_margin]
     fig_mm.update_xaxes(range=x_range)
     if exp_type == "Enzyme Concentration Variation (Fixed substrate)" and results.get('raw_data'):
         all_y_mm = [v for d in results['raw_data'].values() for v in d['value']]
@@ -741,6 +764,111 @@ def _build_v0_fig(results):
     return fig
 
 
+def _build_v0_supplementary_fig(results):
+    """Enzyme mode에서 R²<0.8일 때 표시하는 supplementary fit figure (export용)."""
+    v0_data = results.get('v0_vs_concentration', {})
+    mm_fit = results.get('mm_fit_results', {})
+    exp_type = mm_fit.get('experiment_type', 'Substrate Concentration Variation (Standard Michaelis-Menten)')
+    if exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)":
+        return None
+    r2_full = mm_fit.get('R_squared')
+    conc_vals = np.array(v0_data.get('concentrations', []), dtype=float)
+    v0_vals = np.array(v0_data.get('v0_values', []), dtype=float)
+    if not (
+        r2_full is not None
+        and r2_full < 0.8
+        and len(conc_vals) >= 3
+        and len(v0_vals) >= 3
+        and len(conc_vals) == len(v0_vals)
+    ):
+        return None
+
+    sort_idx = np.argsort(conc_vals)
+    conc_sorted = conc_vals[sort_idx]
+    v0_sorted = v0_vals[sort_idx]
+    conc_fit = conc_sorted[:3]
+    v0_fit = v0_sorted[:3]
+    conc_excluded = conc_sorted[3:]
+
+    low3_slope, low3_intercept = np.polyfit(conc_fit, v0_fit, 1)
+    v0_fit_pred = np.polyval([low3_slope, low3_intercept], conc_fit)
+    ss_res_low3 = np.sum((v0_fit - v0_fit_pred) ** 2)
+    ss_tot_low3 = np.sum((v0_fit - np.mean(v0_fit)) ** 2)
+    low3_r2 = 1 - (ss_res_low3 / ss_tot_low3) if ss_tot_low3 > 0 else 1.0
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=conc_sorted,
+        y=v0_sorted,
+        mode='markers',
+        name='Experimental v₀ (all points)',
+        marker=dict(size=10, color='red', line=dict(width=2, color='black'))
+    ))
+
+    conc_low3_range = np.linspace(min(conc_sorted), max(conc_sorted), 200)
+    v0_low3_line = low3_slope * conc_low3_range + low3_intercept
+    fig.add_trace(go.Scatter(
+        x=conc_low3_range,
+        y=v0_low3_line,
+        mode='lines',
+        name=f'Low-3 Linear Fit: v₀ = {low3_slope:.4f} * [E] + {low3_intercept:.4f} (R² = {low3_r2:.4f})',
+        line=dict(width=2.5, color='blue', dash='dash')
+    ))
+
+    if len(conc_excluded) > 0:
+        v0_expected = low3_slope * conc_excluded + low3_intercept
+        fig.add_trace(go.Scatter(
+            x=conc_excluded,
+            y=v0_expected,
+            mode='markers',
+            name='Expected v₀ from Low-3 Fit (at not-used [E])',
+            marker=dict(size=11, color='rgba(40,120,255,0.95)', symbol='x', line=dict(width=2, color='rgba(20,60,160,1.0)'))
+        ))
+
+    if len(conc_sorted) >= 5:
+        conc_const = conc_sorted[2:5]
+        v0_const = v0_sorted[2:5]
+        const_mean = float(np.mean(v0_const))
+        const_pred = np.full_like(v0_const, const_mean, dtype=float)
+        const_rmse = float(np.sqrt(np.mean((v0_const - const_pred) ** 2)))
+        mean_abs_const = float(np.abs(np.mean(v0_const)))
+        const_cvrmse = (const_rmse / mean_abs_const * 100.0) if mean_abs_const > 0 else np.nan
+
+        fig.add_trace(go.Scatter(
+            x=conc_const,
+            y=v0_const,
+            mode='markers',
+            name='Const-fit points (3rd-5th [E])',
+            showlegend=False,
+            marker=dict(size=10, color='red', line=dict(width=2, color='black'))
+        ))
+        fig.add_trace(go.Scatter(
+            x=[float(min(conc_const)), float(max(conc_const))],
+            y=[const_mean, const_mean],
+            mode='lines',
+            name=(
+                f'Const Fit (3rd-5th): v₀ = {const_mean:.4f} '
+                f'(CV(RMSE) = {const_cvrmse:.2f}%)'
+            ),
+            line=dict(width=2.5, color='green', dash='dash')
+        ))
+
+    fig.update_layout(
+        title='Supplementary Linear Fit Using Lowest 3 Enzyme Concentrations',
+        xaxis_title='[E] (μg/mL)',
+        yaxis_title='Initial Velocity v₀ (Fluorescence Units / Time)',
+        template='plotly_white',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        height=550,
+        hovermode='x unified',
+        xaxis=dict(showline=True, mirror=True, ticks='outside'),
+        yaxis=dict(showline=True, mirror=True, ticks='outside'),
+        legend=dict(orientation='v', x=0.02, y=0.98, xanchor='left', yanchor='top', bgcolor='rgba(255,255,255,0.9)')
+    )
+    return fig
+
+
 def _build_all_export_figures(results):
     """분석에서 생성되는 모든 figure를 (파일명_접미사제외, fig) 리스트로 반환."""
     out = []
@@ -749,9 +877,25 @@ def _build_all_export_figures(results):
     fig_interp = _build_interpolated_curves_fig(results)
     if fig_interp is not None:
         out.append(("Time_Fluorescence_Interpolated_Curves", fig_interp))
-    fig_exp_only = _build_exponential_increase_interp_fig(results)
-    if fig_exp_only is not None:
-        out.append(("Normalized_Time_Fluorescence_exponential_curves", fig_exp_only))
+    fig_exp_tau_max = _build_exponential_increase_interp_fig(
+        results,
+        per_concentration_cut=False,
+        x_range_mode='max_3tau',
+        show_experimental_data=False,
+        legend_on_lines=True,
+        cut_at_x_max=True
+    )
+    if fig_exp_tau_max is not None:
+        out.append(("Normalized_Time_Fluorescence_exponential_curves_3tau_max_range", fig_exp_tau_max))
+    # v0/Linear fit 플롯은 앞쪽(요약 플롯 다음)에 배치
+    if 'v0_vs_concentration' in results and results.get('mm_fit_results', {}).get('fit_success'):
+        if exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)":
+            out.append(("v0_vs_S_Fit", _build_v0_fig(results)))
+        else:
+            out.append(("Linear_fit", _build_v0_fig(results)))
+            fig_v0_supp = _build_v0_supplementary_fig(results)
+            if fig_v0_supp is not None:
+                out.append(("Supplementary_low3_const_fit", fig_v0_supp))
     if 'normalization_results' in results and results['normalization_results']:
         norm_results = results['normalization_results']
         conc_order = sorted(norm_results.keys(), key=lambda x: norm_results[x]['concentration'])
@@ -762,11 +906,6 @@ def _build_all_export_figures(results):
             fig_scaled = _build_norm_fig_uptoy1(norm_data, exp_type)
             if fig_scaled is not None:
                 out.append((f"Normalization_to_plateau_{conc_label}", fig_scaled))
-    if 'v0_vs_concentration' in results and results.get('mm_fit_results', {}).get('fit_success'):
-        if exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)":
-            out.append(("v0_vs_S_Fit", _build_v0_fig(results)))
-        else:
-            out.append(("Linear_fit", _build_v0_fig(results)))
     # 모든 플롯에 x/y축 눈금(ticks) 및 축선 적용
     result = []
     for name, fig in out:
@@ -2883,16 +3022,29 @@ def data_load_mode(st):
                         param_df = pd.DataFrame(param_data)
                         st.dataframe(param_df, use_container_width=True, hide_index=True)
                         
-                        # 농도별 exponential increase 구간만 (Time-Flu 인터폴레이션 플롯 디자인)
-                        fig_exponential_only = _build_exponential_increase_interp_fig(results)
-                        if fig_exponential_only is not None:
-                            st.subheader("Normalized Time-Fluorescence exponential curves")
-                            st.caption("Interpolated curves up to plateau, exponential section (0 ≤ t ≤ 3τ) only. Same design as Time-Fluorescence Interpolated Curves.")
-                            st.plotly_chart(fig_exponential_only, use_container_width=True)
+                        fig_exponential_tau_max = _build_exponential_increase_interp_fig(
+                            results,
+                            per_concentration_cut=False,
+                            x_range_mode='max_3tau',
+                            show_experimental_data=False,
+                            legend_on_lines=True,
+                            cut_at_x_max=True
+                        )
+                        if fig_exponential_tau_max is not None:
+                            st.subheader("Normalized Time-Fluorescence exponential curves (3τ_max range)")
+                            st.caption("No per-concentration 3τ cut. Data is shown up to t ≤ 3τ_max, with equal left/right x-axis margins.")
+                            st.plotly_chart(fig_exponential_tau_max, use_container_width=True)
                         
                         # 모든 농도 요약 테이블
                         st.subheader("Summary of All Concentration Normalization")
                         summary_data = []
+                        valid_taus = [
+                            n_data.get('tau')
+                            for n_data in norm_results.values()
+                            if n_data.get('tau') is not None and not np.isinf(n_data.get('tau')) and n_data.get('tau') > 0
+                        ]
+                        tau_max_all = max(valid_taus) if len(valid_taus) > 0 else None
+                        t_exponential_plateau_max_str = f"{3.0 * tau_max_all:.4f}" if tau_max_all is not None else "N/A"
                         for conc_name in conc_order:
                             n_data = norm_results[conc_name]
                             # v0 계산
@@ -2907,13 +3059,9 @@ def data_load_mode(st):
                             # α (절단비율) 계산: normalized_values = (F - F0) / (Fmax - F0)
                             normalized_values = n_data.get('normalized_values', [])
                             if len(normalized_values) > 0:
-                                alpha_min = np.min(normalized_values)
-                                alpha_max = np.max(normalized_values)
                                 alpha_mean = np.mean(normalized_values)
-                                alpha_range_str = f"{alpha_min:.3f}-{alpha_max:.3f}"
                                 alpha_mean_str = f"{alpha_mean:.3f}"
                             else:
-                                alpha_range_str = "N/A"
                                 alpha_mean_str = "N/A"
                             
                             # 구간 경계 시간 계산
@@ -2935,8 +3083,8 @@ def data_load_mode(st):
                                 'τ': f"{n_data['tau']:.4f}" if n_data['tau'] is not None and not np.isinf(n_data['tau']) else "N/A",
                                 'Initial→Exponent (t=0.1τ)': t_initial_exponential_str_conc,
                                 'Exponent→Plateau (t=3τ)': t_exponential_plateau_str_conc,
+                                'Exponent→Plateau (t=3τ_max)': t_exponential_plateau_max_str,
                                 'v₀ (RFU/min)': f"{v0_conc:.2f}" if v0_conc is not None else "N/A",
-                                'α Range': alpha_range_str,
                                 'α Mean': alpha_mean_str,
                                 'R²': f"{n_data['R_squared']:.4f}",
                                 'Equation': n_data['equation'][:50] + "..." if len(n_data['equation']) > 50 else n_data['equation']
@@ -3105,36 +3253,68 @@ def data_load_mode(st):
 
                             fig_v0_low3 = go.Figure()
                             fig_v0_low3.add_trace(go.Scatter(
-                                x=conc_fit,
-                                y=v0_fit,
+                                x=conc_sorted,
+                                y=v0_sorted,
                                 mode='markers',
-                                name='Used for fit (lowest 3 [E])',
+                                name='Experimental v₀ (all points)',
                                 marker=dict(size=10, color='red', line=dict(width=2, color='black'))
                             ))
-                            if len(conc_excluded) > 0:
-                                fig_v0_low3.add_trace(go.Scatter(
-                                    x=conc_excluded,
-                                    y=v0_excluded,
-                                    mode='markers',
-                                    name='Not used in fit',
-                                    marker=dict(size=9, color='rgba(120,120,120,0.75)', line=dict(width=1, color='rgba(60,60,60,0.8)'))
-                                ))
 
-                            conc_low3_range = np.linspace(min(conc_fit), max(conc_fit), 100)
+                            conc_low3_range = np.linspace(min(conc_sorted), max(conc_sorted), 200)
                             v0_low3_line = low3_slope * conc_low3_range + low3_intercept
                             fig_v0_low3.add_trace(go.Scatter(
                                 x=conc_low3_range,
                                 y=v0_low3_line,
                                 mode='lines',
                                 name=f'Low-3 Linear Fit: v₀ = {low3_slope:.4f} * [E] + {low3_intercept:.4f} (R² = {low3_r2:.4f})',
-                                line=dict(width=2.5, color='green', dash='dash')
+                                line=dict(width=2.5, color='blue', dash='dash')
                             ))
+                            if len(conc_excluded) > 0:
+                                v0_expected = low3_slope * conc_excluded + low3_intercept
+                                fig_v0_low3.add_trace(go.Scatter(
+                                    x=conc_excluded,
+                                    y=v0_expected,
+                                    mode='markers',
+                                    name='Expected v₀ from Low-3 Fit (at not-used [E])',
+                                    marker=dict(size=11, color='rgba(40,120,255,0.95)', symbol='x', line=dict(width=2, color='rgba(20,60,160,1.0)'))
+                                ))
+
+                            # 5개 농도 데이터 기준: 3,4,5번째 점(정렬 후 index 2~4)에 대해 상수 피팅(y=평균)
+                            if len(conc_sorted) >= 5:
+                                conc_const = conc_sorted[2:5]
+                                v0_const = v0_sorted[2:5]
+                                const_mean = float(np.mean(v0_const))
+                                const_pred = np.full_like(v0_const, const_mean, dtype=float)
+                                const_rmse = float(np.sqrt(np.mean((v0_const - const_pred) ** 2)))
+                                mean_abs_const = float(np.abs(np.mean(v0_const)))
+                                const_cvrmse = (const_rmse / mean_abs_const * 100.0) if mean_abs_const > 0 else np.nan
+
+                                fig_v0_low3.add_trace(go.Scatter(
+                                    x=conc_const,
+                                    y=v0_const,
+                                    mode='markers',
+                                    name='Const-fit points (3rd-5th [E])',
+                                    showlegend=False,
+                                    marker=dict(size=10, color='red', line=dict(width=2, color='black'))
+                                ))
+                                fig_v0_low3.add_trace(go.Scatter(
+                                    x=[float(min(conc_const)), float(max(conc_const))],
+                                    y=[const_mean, const_mean],
+                                    mode='lines',
+                                    name=(
+                                        f'Const Fit (3rd-5th): v₀ = {const_mean:.4f} '
+                                        f'(CV(RMSE) = {const_cvrmse:.2f}%)'
+                                    ),
+                                    line=dict(width=2.5, color='green', dash='dash')
+                                ))
 
                             fig_v0_low3.update_layout(
                                 title='Supplementary Linear Fit Using Lowest 3 Enzyme Concentrations',
                                 xaxis_title='[E] (μg/mL)',
                                 yaxis_title='Initial Velocity v₀ (Fluorescence Units / Time)',
                                 template='plotly_white',
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                paper_bgcolor='rgba(0,0,0,0)',
                                 height=550,
                                 hovermode='x unified',
                                 xaxis=dict(showline=True, mirror=True, ticks='outside'),
@@ -3142,7 +3322,7 @@ def data_load_mode(st):
                                 legend=dict(orientation='v', x=0.02, y=0.98, xanchor='left', yanchor='top', bgcolor='rgba(255,255,255,0.9)')
                             )
                             fig_v0_low3 = _apply_display_layout_like_export(fig_v0_low3)
-                            st.info("Overall linear fit R² is below 0.8. Showing supplementary fit using only the lowest 3 [E] points.")
+                            st.info("Overall linear fit R² is below 0.8. Showing supplementary low-3 linear fit and (if 5 points exist) a constant fit for 3rd-5th [E].")
                             st.plotly_chart(fig_v0_low3, use_container_width=True)
                 else:
                     st.warning("No v₀ vs concentration data available.")
@@ -3262,12 +3442,26 @@ def data_load_mode(st):
                         if 'normalization_results' in results and results['normalization_results']:
                             norm_results = results['normalization_results']
                             norm_summary_data = []
+                            valid_taus_export = [
+                                n_data.get('tau')
+                                for n_data in norm_results.values()
+                                if n_data.get('tau') is not None and not np.isinf(n_data.get('tau')) and n_data.get('tau') > 0
+                            ]
+                            tau_max_export = max(valid_taus_export) if len(valid_taus_export) > 0 else None
+                            t_exponential_plateau_max_export = 3.0 * tau_max_export if tau_max_export is not None else None
                             for conc_name in sorted(norm_results.keys(), key=lambda x: norm_results[x]['concentration']):
                                 n_data = norm_results[conc_name]
                                 conc_value = n_data['concentration']
                                 v0_conc = n_data.get('v0', 0)
                                 if v0_conc == 0 and n_data.get('k_obs') is not None:
                                     v0_conc = n_data['k_obs'] * (n_data['Fmax'] - n_data['F0'])
+                                tau_conc = n_data.get('tau', None)
+                                if tau_conc is not None and not np.isinf(tau_conc) and tau_conc > 0:
+                                    t_initial_exponential_export = 0.1 * tau_conc
+                                    t_exponential_plateau_export = 3.0 * tau_conc
+                                else:
+                                    t_initial_exponential_export = None
+                                    t_exponential_plateau_export = None
                                 if _exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)":
                                     conc_display = f"{conc_value} μM"
                                 else:
@@ -3278,6 +3472,9 @@ def data_load_mode(st):
                                     'F_max': n_data['Fmax'],
                                     'k_obs': n_data.get('k_obs', None),
                                     'τ': n_data.get('tau', None),
+                                    'Initial→Exponent (t=0.1τ)': t_initial_exponential_export,
+                                    'Exponent→Plateau (t=3τ)': t_exponential_plateau_export,
+                                    'Exponent→Plateau (t=3τ_max)': t_exponential_plateau_max_export,
                                     'v0 (RFU/min)': v0_conc,
                                     'R²': n_data['R_squared'],
                                     'Equation': n_data['equation']
@@ -3285,6 +3482,77 @@ def data_load_mode(st):
                             if norm_summary_data:
                                 norm_summary_df = pd.DataFrame(norm_summary_data)
                                 norm_summary_df.to_excel(writer, sheet_name='Normalization results', index=False)
+                        # Enzyme mode supplementary fit details sheet (below-0.8 case visualization details)
+                        if _exp_type != "Substrate Concentration Variation (Standard Michaelis-Menten)":
+                            v0_data_export = results.get('v0_vs_concentration', {})
+                            mm_fit_export = results.get('mm_fit_results', {})
+                            conc_vals_export = np.array(v0_data_export.get('concentrations', []), dtype=float)
+                            v0_vals_export = np.array(v0_data_export.get('v0_values', []), dtype=float)
+                            if (
+                                len(conc_vals_export) >= 3
+                                and len(v0_vals_export) >= 3
+                                and len(conc_vals_export) == len(v0_vals_export)
+                            ):
+                                sort_idx_export = np.argsort(conc_vals_export)
+                                conc_sorted_export = conc_vals_export[sort_idx_export]
+                                v0_sorted_export = v0_vals_export[sort_idx_export]
+
+                                conc_low3_export = conc_sorted_export[:3]
+                                v0_low3_export = v0_sorted_export[:3]
+                                slope_low3_export, intercept_low3_export = np.polyfit(conc_low3_export, v0_low3_export, 1)
+                                pred_low3_on_low3_export = np.polyval([slope_low3_export, intercept_low3_export], conc_low3_export)
+                                ss_res_low3_export = np.sum((v0_low3_export - pred_low3_on_low3_export) ** 2)
+                                ss_tot_low3_export = np.sum((v0_low3_export - np.mean(v0_low3_export)) ** 2)
+                                r2_low3_export = 1 - (ss_res_low3_export / ss_tot_low3_export) if ss_tot_low3_export > 0 else 1.0
+
+                                const_mean_export = None
+                                const_rmse_export = None
+                                const_cvrmse_export = None
+                                if len(conc_sorted_export) >= 5:
+                                    v0_const_export = v0_sorted_export[2:5]
+                                    const_mean_export = float(np.mean(v0_const_export))
+                                    const_pred_export = np.full_like(v0_const_export, const_mean_export, dtype=float)
+                                    const_rmse_export = float(np.sqrt(np.mean((v0_const_export - const_pred_export) ** 2)))
+                                    mean_abs_const_export = float(np.abs(np.mean(v0_const_export)))
+                                    const_cvrmse_export = (const_rmse_export / mean_abs_const_export * 100.0) if mean_abs_const_export > 0 else np.nan
+
+                                full_r2_export = mm_fit_export.get('R_squared')
+                                summary_rows_export = [
+                                    {'Item': 'Condition (for supplementary plot)', 'Value': 'Full linear fit R² < 0.8'},
+                                    {'Item': 'Full linear fit R²', 'Value': full_r2_export},
+                                    {'Item': 'Low-3 linear equation', 'Value': f"v₀ = {slope_low3_export:.6f} * [E] + {intercept_low3_export:.6f}"},
+                                    {'Item': 'Low-3 linear fit R²', 'Value': r2_low3_export},
+                                    {'Item': 'Const fit range', 'Value': '3rd-5th concentration points (sorted by [E])'},
+                                    {'Item': 'Const fit equation', 'Value': f"v₀ = {const_mean_export:.6f}" if const_mean_export is not None else 'N/A (requires at least 5 concentrations)'},
+                                    {'Item': 'Const fit CV(RMSE) %', 'Value': const_cvrmse_export if const_cvrmse_export is not None else 'N/A'}
+                                ]
+                                supp_summary_df = pd.DataFrame(summary_rows_export)
+
+                                pred_low3_all_export = slope_low3_export * conc_sorted_export + intercept_low3_export
+                                conc_excluded_export = conc_sorted_export[3:]
+                                expected_excluded_map_export = {
+                                    float(c): float(slope_low3_export * c + intercept_low3_export) for c in conc_excluded_export
+                                }
+                                rows_export = []
+                                for idx_export, (c_export, v_export, p_export) in enumerate(
+                                    zip(conc_sorted_export, v0_sorted_export, pred_low3_all_export), start=1
+                                ):
+                                    c_key = float(c_export)
+                                    is_low3 = idx_export <= 3
+                                    is_const = 3 <= idx_export <= 5
+                                    rows_export.append({
+                                        f'[E] ({conc_unit})': float(c_export),
+                                        'Experimental v0': float(v_export),
+                                        'Expected v0 (Low-3 linear fit)': float(p_export),
+                                        'Expected v0 at not-used [E]': expected_excluded_map_export.get(c_key, np.nan),
+                                        'Residual (Exp - Expected)': float(v_export - p_export),
+                                        'Used in Low-3 fit': 'Yes' if is_low3 else 'No',
+                                        'Used in Const fit (3rd-5th)': 'Yes' if is_const else 'No',
+                                        'Const-fit y (mean of 3rd-5th)': const_mean_export if is_const and const_mean_export is not None else np.nan
+                                    })
+                                supp_values_df = pd.DataFrame(rows_export)
+                                supp_summary_df.to_excel(writer, sheet_name='Supplementary fit v0-E', index=False)
+                                supp_values_df.to_excel(writer, sheet_name='Supplementary fit v0-E', index=False, startrow=len(supp_summary_df) + 2)
                         if 'mm_fit_results' in results and results['mm_fit_results'].get('fit_success'):
                             mm_fit = results['mm_fit_results']
                             if _exp_type == "Substrate Concentration Variation (Standard Michaelis-Menten)":
@@ -3337,7 +3605,7 @@ def data_load_mode(st):
                         file_name=xlsx_download_name,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True,
-                        help="Full Excel: Experimental data, Time–FLU Interpolated curves, Normalization results, Fit results, Model simulation input.",
+                        help="Full Excel: Experimental data, Time–FLU Interpolated curves, Normalization results, Supplementary fit v0-E, Fit results, Model simulation input.",
                         key="data_tab_xlsx_download"
                     )
                 except Exception as e:
