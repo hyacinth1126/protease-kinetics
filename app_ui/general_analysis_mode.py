@@ -29,7 +29,10 @@ from mode_general_analysis.analysis import (
     ModelC_MassTransfer,
     ModelD_ConcentrationDependentFmax,
     ModelE_ProductInhibition,
-    ModelF_EnzymeSurfaceSequestration
+    ModelF_EnzymeSurfaceSequestration,
+    fit_progress_curves_pseudo_first_order,
+    ProgressCurveFitResult,
+    KobsVsELinearResult,
 )
 _debug_log("module load: importing mode_general_analysis.plot")
 from mode_general_analysis.plot import Visualizer
@@ -201,6 +204,14 @@ def general_analysis_mode(st):
         )
     except Exception:
         pass
+    
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("α (Alpha) normalization")
+    use_shared_Finf = st.sidebar.checkbox(
+        "Use shared F_∞ (same for all [E])",
+        value=True,
+        help="Use one F_∞ (F_∞,max = highest plateau) for all [E]. When plateau height depends on [E] (incomplete cleavage in time window), this global normalization α(t)=(F_t−F₀)/(F_∞,max−F₀) is the usual paper approach and addresses reviewer concerns."
+    )
     
     # Step 1: Load Fitted Curves data (원본 데이터 플롯용)
     df_fitted = None
@@ -600,7 +611,7 @@ def general_analysis_mode(st):
     df_current = region_divider.divide_regions(df_current)
     
     # Step 3-2: Final normalization (using region information or fitted params)
-    df_current = normalizer.normalize_final(df_current, fitted_params=fitted_params)
+    df_current = normalizer.normalize_final(df_current, fitted_params=fitted_params, use_shared_Finf=use_shared_Finf)
     
     df = df_current
     
@@ -683,8 +694,9 @@ def general_analysis_mode(st):
             st.info("No data available.")
     
     # Tabs for different views
-    tab1, tab_alpha, tab_evsalpha, tab2, tab3, tab4 = st.tabs([
+    tab1, tab_v0_window, tab_alpha, tab_evsalpha, tab2, tab3, tab4 = st.tabs([
         "📊 v₀ vs [S] Fit",
+        "🕐 v₀ vs [E] by window",
         "📈 Alpha Calculation",
         "📊 [E] vs α Plot",
         "🔬 Model Fitting",
@@ -1011,27 +1023,325 @@ def general_analysis_mode(st):
         else:
             st.info("⚠️ No Michaelis-Menten fitting data. Run analysis in Data Load Mode or load a result file that includes the 'Michaelis-Menten Fit Results' sheet.")
     
+    with tab_v0_window:
+        st.subheader("🕐 v₀ vs [E] linearity by initial-velocity window")
+        st.caption("Compare v₀ vs [E] linear fit when v₀ is computed over different time windows (0–30 s, 0–1 min, 0–2 min, …). Useful to check substrate depletion: short windows → better linearity; long windows → high [E] points drop below line.")
+        with st.expander("📋 Kinetic 해석 가이드 (정규화 속도 · semi-log · k_obs vs [E] · 고농도 local slope)"):
+            st.markdown("""
+**A. 각 농도별 정규화된 속도 비교**  
+$v(t)/v(0)$ 또는 최대값으로 나눠서 겹쳐 보세요.
+- **고농도만** 더 빨리 감소하면 → **depletion** 쪽.
+- 모든 조건이 비슷한 형태면 → 단순한 1차형 progress curve 가능성.
+
+**B. Semi-log plot**  
+$\\ln v(t)$ vs $t$
+- 1차형이면 거의 **직선**입니다.
+- 고농도에서만 더 빨리 꺾이면 → depletion/artifact를 의심할 수 있습니다.
+
+**C. 가장 좋은 방법**  
+v(t) 직접 미분보다 **progress curve fitting**이 더 낫습니다.  
+$F(t) = F_\\infty (1 - e^{-k_{\\mathrm{obs}} t})$  
+각 농도에서 $k_{\\mathrm{obs}}$를 구하고, **$k_{\\mathrm{obs}}$ vs [E]**를 보세요.  
+- 이게 **linear**면, 적어도 현재 범위에서는 **pseudo-first-order kinetics**로 설명이 잘 됩니다.
+
+**고농도만 따로 확인하는 실무적인 방법**  
+고농도 2–3개 조건만 골라서, **0–15 sec**, **15–30 sec**, **30–60 sec**처럼 아주 짧은 **local slope**를 계산해 보세요.
+- 고농도에서만 0–15 sec slope가 비정상적으로 크고 바로 감소 → **depletion/mixing artifact** 후보  
+- 그냥 매끈한 exponential 감소 → 일반적인 fast kinetics
+
+**지금 단계에서 결론**  
+현재 그림만 보면, "고농도에서 substrate depletion 때문에 $v_0$가 과소추정됐다"는 주장은 아직 약합니다.  
+오히려 먼저 확인할 건:
+1. 수치미분 방식이 **초기 spike를 과장**했는지  
+2. **$k_{\\mathrm{obs}}$ vs [E]**가 linear인지  
+3. 정규화된 **$v(t)$ shape**가 농도별로 다른지  
+입니다.
+""")
+        exp_type_for_window = (mm_fit or {}).get('experiment_type', '')
+        is_enzyme_var = exp_type_for_window in ("Enzyme Concentration Variation (Fixed substrate)", "Enzyme Concentration Variation", "Enzyme 농도 변화 (기질 고정)")
+        if not is_enzyme_var:
+            st.info("ℹ️ This tab is for **Enzyme Concentration Variation** (fixed substrate, v₀ vs [E]). For substrate variation (MM) experiments this comparison is not applicable.")
+        else:
+            conc_col_raw = 'enzyme_ugml' if 'enzyme_ugml' in df_raw.columns else next((c for c in ['Concentration [ug/mL]', 'Concentration'] if c in df_raw.columns), None)
+            if conc_col_raw is None or 'time_min' not in df_raw.columns:
+                st.warning("Time–fluorescence curves not found. Upload a file that contains **Time–FLU Interpolated curves** (or run Data Load Mode) to use this comparison.")
+            else:
+                time_max_avail = float(df_raw['time_min'].max())
+                # Windows: 30 s, 1 min, 2 min, 3 min (in minutes)
+                window_minutes = [0.5, 1.0, 2.0, 3.0]
+                window_minutes = [w for w in window_minutes if w <= time_max_avail + 0.01]
+                if not window_minutes:
+                    window_minutes = [time_max_avail] if time_max_avail > 0 else [1.0]
+                window_labels = [f"0–{int(w*60)} s" if w < 1 else f"0–{w:.0f} min" for w in window_minutes]
+                results_by_window = []
+                flu_col = 'FL_intensity' if 'FL_intensity' in df_raw.columns else 'RFU_Interpolated'
+                if flu_col not in df_raw.columns and 'RFU_Interpolated' in df_raw.columns:
+                    flu_col = 'RFU_Interpolated'
+
+                def _central_diff_velocity(t, F):
+                    """v(t_i) = (F_{i+1} - F_{i-1}) / (t_{i+1} - t_{i-1}). Interior points only."""
+                    n = len(t)
+                    if n < 3:
+                        return t, np.full_like(t, np.nan)
+                    v = np.full(n, np.nan)
+                    for i in range(1, n - 1):
+                        dt = t[i + 1] - t[i - 1]
+                        if abs(dt) > 1e-12:
+                            v[i] = (F[i + 1] - F[i - 1]) / dt
+                    return t, v
+
+                for t_max_min, wlabel in zip(window_minutes, window_labels):
+                    v0_per_conc = []
+                    concs_used = []
+                    for conc in df_raw[conc_col_raw].unique():
+                        sub = df_raw[(df_raw[conc_col_raw] == conc) & (df_raw['time_min'] <= t_max_min)].sort_values('time_min')
+                        if len(sub) < 2:
+                            continue
+                        t = sub['time_min'].values.astype(float)
+                        y = sub[flu_col].values.astype(float)
+                        if np.ptp(t) < 1e-6:
+                            continue
+                        coeffs = np.polyfit(t, y, 1)
+                        v0_per_conc.append(coeffs[0])
+                        concs_used.append(float(conc))
+                    if len(concs_used) < 2:
+                        results_by_window.append({'window': wlabel, 't_max_min': t_max_min, 'R2': None, 'slope': None, 'intercept': None, 'concs': concs_used, 'v0': v0_per_conc})
+                        continue
+                    x = np.array(concs_used)
+                    y = np.array(v0_per_conc)
+                    coeffs = np.polyfit(x, y, 1)
+                    fit = np.polyval(coeffs, x)
+                    ss_res = np.sum((y - fit) ** 2)
+                    ss_tot = np.sum((y - np.mean(y)) ** 2)
+                    r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else 0
+                    results_by_window.append({'window': wlabel, 't_max_min': t_max_min, 'R2': r2, 'slope': coeffs[0], 'intercept': coeffs[1], 'concs': concs_used, 'v0': v0_per_conc})
+                table_rows = [{'Window': r['window'], 'R²': f"{r['R2']:.4f}" if r['R2'] is not None else "—", 'Slope': f"{r['slope']:.4f}" if r['slope'] is not None else "—", 'Intercept': f"{r['intercept']:.2f}" if r['intercept'] is not None else "—"} for r in results_by_window]
+                st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+                fig_w = go.Figure()
+                colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
+                for i, r in enumerate(results_by_window):
+                    if r['concs'] and r['v0'] and r['slope'] is not None:
+                        fig_w.add_trace(go.Scatter(x=r['concs'], y=r['v0'], mode='markers', name=f"{r['window']} (R²={r['R2']:.4f})", marker=dict(size=10, color=colors[i % len(colors)])))
+                        x_smooth = np.linspace(min(r['concs']), max(r['concs']), 50)
+                        fig_w.add_trace(go.Scatter(x=x_smooth.tolist(), y=(r['slope'] * x_smooth + r['intercept']).tolist(), mode='lines', name=f"{r['window']} fit", line=dict(dash='dash', color=colors[i % len(colors)])))
+                fig_w.update_layout(title="v₀ vs [E] by initial-velocity window", xaxis_title="[E] (μg/mL)", yaxis_title="Initial Velocity v₀ (RFU/min)", template="plotly_white", height=500, hovermode="x unified")
+                st.plotly_chart(fig_w, use_container_width=True)
+                st.markdown("**해석**: 짧은 window에서 선형성(R²)이 좋고, 긴 window로 갈수록 고농도 [E]가 아래로 처지면 → **substrate depletion** 또는 초기 burst 이후 빠른 기질 소모 가능성이 큽니다.")
+                st.markdown("---")
+
+                concs_sorted = sorted(df_raw[conc_col_raw].dropna().unique(), key=lambda x: float(x))
+                colors_abc = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
+
+                # --- A. 정규화된 속도 비교 v(t)/v(0) 또는 v(t)/v_max ---
+                st.subheader("A. 각 농도별 정규화된 속도 비교 v(t)/v(0)")
+                st.caption("v(t)/v(0) 또는 최대값으로 나눠서 겹쳐 보세요. 고농도만 더 빨리 감소하면 depletion; 모든 조건이 비슷한 형태면 단순 1차형 progress curve 가능성.")
+                norm_by = st.radio("정규화 기준", ["v(0) (첫 유효 속도)", "최대값 v_max"], key="norm_velocity_radio", horizontal=True)
+                fig_norm = go.Figure()
+                for i, conc in enumerate(concs_sorted):
+                    sub = df_raw[df_raw[conc_col_raw] == conc].sort_values('time_min')
+                    if len(sub) < 3:
+                        continue
+                    t = sub['time_min'].values.astype(float)
+                    F = sub[flu_col].values.astype(float).astype(np.float64)
+                    t_plot, v_t = _central_diff_velocity(t, F)
+                    valid = ~np.isnan(v_t) & (v_t > 0)
+                    if not np.any(valid):
+                        continue
+                    v_valid = v_t[valid]
+                    t_valid = t_plot[valid]
+                    if norm_by.startswith("v(0)"):
+                        v0_ref = v_valid[0]
+                        if v0_ref <= 0:
+                            continue
+                        y_plot = v_valid / v0_ref
+                    else:
+                        v_max = np.nanmax(v_valid)
+                        if v_max <= 0:
+                            continue
+                        y_plot = v_valid / v_max
+                    fig_norm.add_trace(go.Scatter(
+                        x=t_valid, y=y_plot, mode='lines+markers', name=f"[E] = {float(conc):.2f} μg/mL",
+                        line=dict(width=2, color=colors_abc[i % len(colors_abc)]), marker=dict(size=4, color=colors_abc[i % len(colors_abc)])
+                    ))
+                fig_norm.update_layout(
+                    title="Normalized velocity v(t)/v(0) or v(t)/v_max vs Time",
+                    xaxis_title="Time (min)", yaxis_title="v(t) / v(ref)",
+                    template="plotly_white", height=400, hovermode="x unified"
+                )
+                st.plotly_chart(fig_norm, use_container_width=True)
+
+                # --- B. Semi-log ln v(t) vs t ---
+                st.subheader("B. Semi-log: ln v(t) vs t")
+                st.caption("1차형이면 거의 직선. 고농도에서만 더 빨리 꺾이면 depletion/artifact 의심.")
+                v_min_cut = st.number_input("v(t) 최소값 (이하 제외, ln 안정성)", value=1e-6, format="%.0e", key="v_min_semilog")
+                fig_log = go.Figure()
+                for i, conc in enumerate(concs_sorted):
+                    sub = df_raw[df_raw[conc_col_raw] == conc].sort_values('time_min')
+                    if len(sub) < 3:
+                        continue
+                    t = sub['time_min'].values.astype(float)
+                    F = sub[flu_col].values.astype(float).astype(np.float64)
+                    t_plot, v_t = _central_diff_velocity(t, F)
+                    valid = ~np.isnan(v_t) & (v_t > v_min_cut)
+                    if not np.any(valid):
+                        continue
+                    fig_log.add_trace(go.Scatter(
+                        x=t_plot[valid], y=np.log(v_t[valid]), mode='lines+markers', name=f"[E] = {float(conc):.2f} μg/mL",
+                        line=dict(width=2, color=colors_abc[i % len(colors_abc)]), marker=dict(size=4, color=colors_abc[i % len(colors_abc)])
+                    ))
+                fig_log.update_layout(
+                    title="ln v(t) vs Time (by [E])",
+                    xaxis_title="Time (min)", yaxis_title="ln v(t)",
+                    template="plotly_white", height=400, hovermode="x unified"
+                )
+                st.plotly_chart(fig_log, use_container_width=True)
+
+                # --- C. k_obs vs [E] (progress curve fitting) — reviewer-facing ---
+                st.subheader("C. k_obs vs [E] (progress curve fitting)")
+                st.caption("F(t) = F₀ + (F∞ − F₀)(1 − e^(−k_obs·t)), time in seconds → k_obs (s⁻¹). Linear k_obs vs [E] supports pseudo-first-order and addresses substrate depletion / diffusion limitation concerns.")
+                with st.expander("📌 Plateau가 [E]에 따라 다를 때 (리뷰어 대응)"):
+                    st.markdown("""
+                    - **현상**: 최종 형광(plateau)이 효소 농도가 높을수록 커짐.
+                    - **해석**: 실험 시간 내 완전 절단 미도달이 가장 흔함 (낮은 [E]에서 F_∞,obs < F_∞,true). 또는 hydrogel/confined 기질에서 접근성 차이.
+                    - **대응**: (1) **Shared F_∞** (사이드바)로 α = (F_t−F₀)/(F_∞,max−F₀) 사용. (2) **Kinetics는 k_obs vs [E]** 사용 — v₀ vs [E]보다 안정적.
+                    - **논문 문구 예**: *"The final fluorescence intensity increased with enzyme concentration, suggesting that complete substrate cleavage was not reached within the experimental time window at lower enzyme levels."*
+                    """)
+                use_three_param = st.checkbox("Use 3-parameter fit F₀ + (F∞ − F₀)(1 − e^(−k_obs·t))", value=True, key="kobs_three_param")
+                try:
+                    progress_results, linear_result = fit_progress_curves_pseudo_first_order(
+                        df_raw,
+                        conc_col=conc_col_raw,
+                        time_col='time_min',
+                        fluor_col=flu_col,
+                        enzyme_mw_kda=float(enzyme_mw),
+                        use_three_param=use_three_param,
+                    )
+                except Exception as e:
+                    progress_results = []
+                    linear_result = None
+                    st.warning(f"Progress curve fitting failed: {e}")
+                if len(progress_results) >= 2 and linear_result is not None:
+                    concs_display = [r.conc for r in progress_results]
+                    k_obs_s = [r.k_obs_per_s for r in progress_results]
+                    fig_k = go.Figure()
+                    fig_k.add_trace(go.Scatter(x=concs_display, y=k_obs_s, mode='markers', name="k_obs (s⁻¹)", marker=dict(size=12, color='#1f77b4')))
+                    E_M = linear_result.E_M
+                    k_arr = linear_result.k_obs
+                    slope = linear_result.slope_M_inv_s
+                    intercept = linear_result.intercept_per_s
+                    x_line_ugml = np.linspace(min(concs_display), max(concs_display), 50)
+                    E_M_line = (x_line_ugml / enzyme_mw) * 1e-6
+                    y_line = slope * E_M_line + intercept
+                    fig_k.add_trace(go.Scatter(x=x_line_ugml.tolist(), y=y_line.tolist(), mode='lines', name="Linear fit k_obs vs [E]", line=dict(dash='dash', color='#ff7f0e')))
+                    fig_k.update_layout(
+                        title="k_obs vs [E] (pseudo-first-order)",
+                        xaxis_title="[E] (μg/mL)",
+                        yaxis_title="k_obs (s⁻¹)",
+                        template="plotly_white",
+                        height=400,
+                        hovermode="x unified",
+                    )
+                    st.plotly_chart(fig_k, use_container_width=True)
+                    st.markdown(f"**선형성**: R² = {linear_result.r_squared:.4f} — linear에 가까우면 현재 범위에서 **pseudo-first-order kinetics**로 설명 가능.")
+                    st.markdown(f"**k_cat/K_M** (slope of k_obs vs [E] in M): **{slope:.3e}** M⁻¹ s⁻¹ (± {linear_result.slope_std:.3e}).")
+                    st.markdown("**For reviewers**: *The reaction progress curves were fitted to F(t) = F₀ + (F∞ − F₀)(1 − e^(−k_obs·t)). The observed rate constant k_obs was linear with enzyme concentration (R² = {:.4f}), consistent with pseudo-first-order kinetics and arguing against substrate depletion or diffusion limitation dominating in the time window used.*".format(linear_result.r_squared))
+                    table_df = pd.DataFrame({
+                        "[E] (μg/mL)": [r.conc for r in progress_results],
+                        "k_obs (s⁻¹)": [f"{r.k_obs_per_s:.6f}" for r in progress_results],
+                        "k_obs std": [f"{r.k_obs_std:.4e}" for r in progress_results],
+                        "F₀": [f"{r.F0:.2f}" for r in progress_results],
+                        "F∞": [f"{r.F_inf:.2f}" for r in progress_results],
+                        "R²": [f"{r.r_squared:.4f}" for r in progress_results],
+                    })
+                    st.dataframe(table_df, use_container_width=True, hide_index=True)
+                elif len(progress_results) == 1:
+                    st.warning("k_obs 피팅에 성공한 농도가 1개뿐이라 k_obs vs [E] 선형 회귀를 할 수 없습니다. 데이터 구간 또는 농도 수를 확인하세요.")
+                    table_df = pd.DataFrame({
+                        "[E] (μg/mL)": [r.conc for r in progress_results],
+                        "k_obs (s⁻¹)": [f"{r.k_obs_per_s:.6f}" for r in progress_results],
+                        "F₀": [f"{r.F0:.2f}" for r in progress_results],
+                        "F∞": [f"{r.F_inf:.2f}" for r in progress_results],
+                        "R²": [f"{r.r_squared:.4f}" for r in progress_results],
+                    })
+                    st.dataframe(table_df, use_container_width=True, hide_index=True)
+                else:
+                    st.warning("k_obs 피팅에 성공한 농도가 없습니다. 데이터 구간 또는 농도 수를 확인하세요.")
+
+                st.markdown("---")
+                st.subheader("진단 1: Progress curve의 국소 기울기 v(t) = dF/dt")
+                st.caption("1) Progress curve smoothing (optional) → 2) Numerical derivative v(t_i) = (F_{i+1} − F_{i-1}) / (t_{i+1} − t_{i-1}) → 3) v(t) vs time. 특히 고농도 [E] 조건을 보세요.")
+                use_smooth = st.checkbox("Progress curve smoothing (optional)", value=False, key="v0_window_smooth_curve")
+                smooth_window = 5
+                if use_smooth:
+                    smooth_window = st.slider("Smoothing window (points)", min_value=3, max_value=15, value=5, step=2, key="v0_window_smooth_win")
+
+                colors_vt = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
+                fig_vt = go.Figure()
+                for i, conc in enumerate(concs_sorted):
+                    sub = df_raw[df_raw[conc_col_raw] == conc].sort_values('time_min')
+                    if len(sub) < 3:
+                        continue
+                    t = sub['time_min'].values.astype(float)
+                    F = sub[flu_col].values.astype(float).astype(np.float64)
+                    if use_smooth and len(F) >= smooth_window:
+                        win = min(smooth_window if (smooth_window % 2 == 1) else smooth_window - 1, len(F))
+                        if win % 2 == 0:
+                            win = max(3, win - 1)
+                        try:
+                            from scipy.signal import savgol_filter
+                            F = savgol_filter(F, win, 2)
+                        except Exception:
+                            k = np.ones(min(smooth_window, len(F))) / min(smooth_window, len(F))
+                            F = np.convolve(F, k, mode='same')
+                    t_plot, v_t = _central_diff_velocity(t, F)
+                    valid = ~np.isnan(v_t)
+                    if not np.any(valid):
+                        continue
+                    fig_vt.add_trace(go.Scatter(
+                        x=t_plot[valid],
+                        y=v_t[valid],
+                        mode='lines+markers',
+                        name=f"[E] = {float(conc):.2f} μg/mL",
+                        line=dict(width=2, color=colors_vt[i % len(colors_vt)]),
+                        marker=dict(size=4, color=colors_vt[i % len(colors_vt)]),
+                        legendgroup=str(conc)
+                    ))
+                fig_vt.update_layout(
+                    title="v(t) = dF/dt vs Time (by [E])",
+                    xaxis_title="Time (min)",
+                    yaxis_title="v(t) (dF/dt, RFU/min)",
+                    template="plotly_white",
+                    height=450,
+                    hovermode="x unified",
+                    showlegend=True
+                )
+                st.plotly_chart(fig_vt, use_container_width=True)
+                st.markdown("**해석 포인트 (특히 high [E] 조건)**")
+                st.markdown("""
+                - **Depletion이면**: v(t) **초반 높음** → v(t) **급격히 감소** (기질 소모로 속도 하락).
+                - **Mixing artifact이면**: v(t) **초반 낮음** → v(t) **상승 후 plateau** (혼합 지연 후 안정).
+                """)
+    
     with tab_alpha:
         st.subheader("📈 Alpha (α) Calculation")
 
         with st.expander("📖 What is Alpha (α)? — definition and formula", expanded=False):
             st.markdown("""
             **What is Alpha (α)?**
-            Normalized cleavage ratio, ranging from 0 (no cleavage) to 1 (full cleavage).
+            Normalized cleavage ratio: 0 (no cleavage) ~ 1 (full cleavage).
 
-            **Formula**: α(t) = (F(t) - F₀) / (Fmax - F₀)
-            - **F(t)**: Fluorescence at time t
-              - With Data Load Mode results: interpolated values from the normalization exponential curve (RFU_Interpolated)
-              - Direct calculation: raw fluorescence from the data
-            - **F₀**: Initial fluorescence
-              - If available from Data Load Mode: F0 from interpolated values (MM Results sheet)
-              - Otherwise: minimum fluorescence per concentration (min(F))
-            - **Fmax**: Maximum fluorescence
-              - If available from Data Load Mode: Fmax from interpolated values (MM Results sheet)
-              - Otherwise: Region-based normalization
-                1. If a plateau region exists: mean fluorescence of the plateau (mean(F_plateau))
-                2. If sufficient exponential rise (≥3 points): F∞ from exponential fit (F(t) = F₀ + A·(1 - e^(-k·t)), Fmax = F₀ + A)
-                3. Otherwise: maximum fluorescence (max(F))
+            **Formula**: α(t) = (F_t − F₀) / (F_∞ − F₀)
+            - **F_t (F(t))**: Fluorescence at time t  
+              From Data Load: interpolated curve (RFU_Interpolated). Otherwise: raw fluorescence.
+            - **F₀**: Initial fluorescence (t = 0)  
+              Per concentration. From Data Load (MM Results) if available; otherwise min(F) per concentration.
+            - **F_∞**: Complete cleavage fluorescence  
+              **Often the same value for all enzyme concentrations** (full cleavage → same signal).  
+              Sidebar option **"Use shared F_∞ (same for all [E])"** uses one F_∞ for all conditions (typical in papers).  
+              If off, F_∞ per concentration is chosen by:
+              - **plateau_avg**: mean fluorescence of the plateau (mean(F_plateau))
+              - **exponential_fit**: F∞ from exponential fit (F(t) = F₀ + A·(1 − e^(−k·t)), Fmax = F₀ + A)
+              - **fallback_max**: maximum fluorescence (max(F)) when no plateau or insufficient rise
             """)
 
         # Check if alpha column exists
@@ -1079,6 +1389,8 @@ def general_analysis_mode(st):
             fitted_params_used = st.session_state.get('fitted_params', None)
             using_fitted_params = fitted_params_used is not None and len(fitted_params_used) > 0
             
+            if use_shared_Finf:
+                st.info("📌 **Shared F_∞**: One F_∞ (complete cleavage) for all [E]. α(t) = (F_t − F₀) / (F_∞ − F₀).")
             if using_fitted_params:
                 st.success(f"✅ F0, Fmax parameters loaded ({len(fitted_params_used)} concentrations)")
                 st.info("💡 F0, Fmax are constants from the normalization exponential in Data Load Mode.")
@@ -1088,17 +1400,28 @@ def general_analysis_mode(st):
             
             # F0, Fmax 테이블
             if conc_col and 'F0' in df.columns and 'Fmax' in df.columns:
+                st.caption("**Fmax method**: how F_∞ was computed for this concentration — **plateau_avg** = mean of plateau region; **exponential_fit** = F∞ from exponential curve; **fallback_max** = max(F) when no plateau/sufficient rise. **Source**: origin of F₀/Fmax (e.g. Data Load or region-based).")
                 f0_fmax_data = []
+                _method_display = {
+                    'plateau_mean': 'plateau_avg',
+                    'exponential_Finf': 'exponential_fit',
+                    'fallback_max': 'fallback_max',
+                    'fallback_temp': 'fallback_max',
+                    'fitted_from_data_load': 'Data Load (exponential)',
+                    'shared_Finf': 'shared F_∞',
+                    'shared_Finf (from data)': 'shared F_∞ (from data)',
+                }
                 for conc in sorted(df[conc_col].unique()):
                     subset = df[df[conc_col] == conc]
-                    fmax_method = subset['Fmax_method'].iloc[0] if 'Fmax_method' in subset.columns else "N/A"
+                    fmax_method_raw = subset['Fmax_method'].iloc[0] if 'Fmax_method' in subset.columns else "N/A"
+                    fmax_method = _method_display.get(fmax_method_raw, fmax_method_raw)
                     
                     # F0, Fmax 값의 출처 확인
                     df_F0 = subset['F0'].iloc[0]
                     df_Fmax = subset['Fmax'].iloc[0]
                     
                     # fitted_params에서 값 확인
-                    source_info = "Region-based calculation"
+                    source_info = "Region-based (see Fmax method)"
                     if using_fitted_params and fitted_params_used:
                         # 농도 매칭 (부동소수점 오차 고려)
                         matched_conc = None
@@ -1113,17 +1436,17 @@ def general_analysis_mode(st):
                             
                             # 값이 일치하는지 확인
                             if abs(df_F0 - fitted_F0) < 0.01 and abs(df_Fmax - fitted_Fmax) < 0.01:
-                                if fmax_method == 'fitted_from_data_load':
-                                    source_info = "Normalization exponential"
+                                if fmax_method_raw == 'fitted_from_data_load':
+                                    source_info = "Data Load (normalization exponential)"
                                 else:
-                                    source_info = "Normalization exponential (from normalization step)"
+                                    source_info = "Data Load (normalization exponential)"
                             else:
-                                source_info = f"From normalization (F0={fitted_F0:.2f}, Fmax={fitted_Fmax:.2f})"
+                                source_info = f"Data Load (F0={fitted_F0:.2f}, Fmax={fitted_Fmax:.2f})"
                     
                     f0_fmax_data.append({
                         f'Concentration ({conc_unit})': conc,
                         'F₀ (initial)': f"{df_F0:.2f}",
-                        'Fmax (max)': f"{df_Fmax:.2f}",
+                        'Fmax (F_∞)': f"{df_Fmax:.2f}",
                         'Fmax method': fmax_method,
                         'Source': source_info
                     })
@@ -1158,13 +1481,13 @@ def general_analysis_mode(st):
                     
                     3. **Final normalization**
                        - F0 = F0_temp
-                       - Fmax: plateau mean if available; else exponential fit for F∞; else max(F)
+                       - Fmax: **plateau_avg** if plateau exists; else **exponential_fit** if ≥3 points in rise; else **fallback_max**
                        - α = (F - F0) / (Fmax - F0)
                     
-                    **Fmax methods:**
-                    - `plateau_avg`: Plateau mean
-                    - `exponential_fit`: F∞ from exponential fit
-                    - `fallback_max`: max(F) (fallback)
+                    **Fmax method (how F_∞ was computed):**
+                    - **plateau_avg**: mean fluorescence of the plateau (mean(F_plateau))
+                    - **exponential_fit**: F∞ from exponential fit (F(t) = F₀ + A·(1 − e^(−k·t)), Fmax = F₀ + A)
+                    - **fallback_max**: maximum fluorescence (max(F)) when no plateau or insufficient exponential rise
                     """)
             
             # Download Alpha data
@@ -1455,7 +1778,10 @@ def general_analysis_mode(st):
                         st.success(f"✅ Model A done: R² = {result_a.r_squared:.4f}, AIC = {result_a.aic:.2f}")
                 else:
                     with result_container:
-                        st.error("❌ Model A fitting failed")
+                        err = getattr(model_a, "_last_fit_error", None)
+                        st.error("❌ Model A fitting failed" + (f": {err}" if err else ""))
+                        if not err:
+                            st.caption("Possible causes: too few data points (need ≥5), alpha/time range issues, or optimizer did not converge. Check **Data status** expander above.")
             
             # Model B
             if fit_model_b:

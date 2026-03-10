@@ -169,11 +169,13 @@ streamlit run app.py
 
 ### 3. Model Simulation 모드 (모델 피팅 및 비교)
 - **`app_ui/general_analysis_mode.py`**  
-  - Data Load 결과(세션 또는 업로드 CSV/XLSX)를 불러와 단위 표준화·정규화·구간 분할 후, 6가지 모델로 피팅하고 결과를 시각화·다운로드.
+  - Data Load 결과(세션) 또는 업로드 CSV/XLSX를 불러와 단위 표준화·정규화·구간 분할 후 모델 피팅·시각화·다운로드.  
+  - **α 정규화**: 사이드바 옵션 **"Use shared F_∞ (same for all [E])"** 로 모든 효소 농도에서 동일한 F_∞(완전 절단 형광) 사용 가능.  
+  - **데이터 소스**: 세션(Data Load 결과) 우선, 없으면 업로드 파일, 없으면 프로젝트 내 calibration xlsx/CSV 또는 내장 샘플 사용.
 
 - **`mode_general_analysis/analysis.py`**  
-  - **어떤 것**: 단위 표준화(UnitStandardizer), 정규화(DataNormalizer), 구간 분할(RegionDivider), 6가지 반응 모델(Substrate Depletion, Enzyme Deactivation, Mass-Transfer 등) 피팅 및 AIC/BIC/R² 비교.  
-  - **어떻게**: 입력 데이터에 표준화·정규화 적용 → 구간 나눔 → 각 모델로 글로벌 피팅 → 최적 모델 선택 및 파라미터 출력.
+  - **어떤 것**: 단위 표준화(UnitStandardizer), 정규화(DataNormalizer, optional 공통 F_∞), 구간 분할(RegionDivider), 반응 모델(Substrate Depletion 등) 피팅 및 AIC/R² 비교.  
+  - **어떻게**: 입력 데이터에 표준화·정규화 적용(공통 F_∞ 옵션 반영) → 구간 나눔 → 모델 글로벌 피팅 → 결과 출력.
 
 - **`mode_general_analysis/plot.py`**  
   - 피팅 결과 시각화(Visualizer).
@@ -196,7 +198,12 @@ streamlit run app.py
     *   Michaelis–Menten 피팅 및 초기 속도(v₀) 계산  
     *   보간(Interpolation) 및 정규화(Normalization)  
     *   결과 → `Michaelis-Menten_calibration_results.xlsx` 및 results 폴더에 CSV 저장  
-*   **Model Simulation 모드**: 분석된 데이터로 6가지 반응 모델 피팅·비교 및 시각화  
+*   **Model Simulation 모드**: 분석된 데이터로 반응 모델 피팅·비교 및 시각화  
+    *   **α(t) 계산**: α(t) = (F_t − F₀) / (F_∞ − F₀). 사이드바에서 **공통 F_∞**(모든 [E]에서 동일한 완전 절단 형광) 사용 옵션 지원(논문에서 흔한 방식).  
+    *   **v₀ vs [S]**: Data Load 결과 또는 업로드 파일이 없으면 예시 샘플로 그래프 표시.  
+    *   **[E] vs α**: α mean만 표시, Exponential·Hyperbolic(MM형) 두 피팅 곡선 및 R²·AIC 비교.  
+    *   **Data Preview**: Data Load와 동일한 기준(Data points per concentration, N, Reaction time).  
+    *   **Model Fitting**: Model A(Substrate Depletion) 등 피팅, 탭 내 접기 가능한 **Kinetic Model Description** 설명.  
 *   **convert_to_csv**: `raw/` 내 XLSX → `csv/` 폴더에 prep_raw 형식 CSV 일괄 생성  
 
 ---
@@ -205,6 +212,30 @@ streamlit run app.py
 
 - **Python**: 3.8 이상 필요.
 - **설치·실행**: 위 **다른 PC에서 셋업** 절을 참고해 venv 생성 후 `pip install -r requirements.txt`, `streamlit run app.py` 로 실행하면 됩니다.
+
+---
+
+## Alpha (α) 정의
+
+- **식**: α(t) = (F_t − F₀) / (F_∞ − F₀)  
+  - F_t: 시간 t에서의 형광  
+  - F₀: 초기 형광(t=0), 농도별  
+  - F_∞: 완전 절단 시 형광  
+- **공통 F_∞**: Model Simulation 사이드바에서 **"Use shared F_∞ (same for all [E])"** 를 켜면 모든 효소 농도에서 같은 F_∞를 사용(논문에서 자주 쓰는 방식). 끄면 농도별 F_∞(plateau/exponential/max 기준) 사용.
+
+---
+
+## Plateau height가 enzyme 농도에 따라 다를 때 (리뷰어 대응)
+
+- **이론**: 기질 양이 동일하면 완전 절단 시 형광 F_∞는 일정해야 하므로, 이상적으로는 plateau height는 [E]와 무관하게 같아야 한다.
+- **Plateau가 [E]에 따라 올라가면** 가능한 해석:
+  1. **실험 시간 내 불완전 절단** (가장 흔함): 낮은 [E]에서는 t_reaction < t_complete → 관측 plateau가 진짜 F_∞보다 낮게 보임. 해결: longer incubation 또는 **global normalization**.
+  2. **기질 접근성** (hydrogel/confined): 낮은 [E]에서는 일부만 절단, 높은 [E]에서 더 깊이 침투 → plateau 증가. (Model D: Concentration-Dependent Fmax 참고.)
+  3. **형광 보정** (inner filter, self-quenching 등): cleavage fraction과 signal이 정확히 비례하지 않을 수 있음.
+- **앱에서의 대응**:
+  - **Global normalization**: 사이드바 **"Use shared F_∞ (same for all [E])"** 사용 시 α(t) = (F_t − F₀) / (F_∞,max − F₀), F_∞,max = highest enzyme plateau. 논문에서 흔히 쓰는 방식.
+  - **Kinetics 분석**: v₀ vs [E]보다 **progress curve** F(t) = F₀ + (F∞ − F₀)(1 − e^(−k_obs·t)) 피팅 후 **k_obs vs [E]** 선형 관계를 보이는 것이 리뷰어에게 더 안정적 (pseudo-first-order, substrate depletion/diffusion 우려 완화).
+- **논문/리뷰어용 문구 예시**: *"The final fluorescence intensity increased with enzyme concentration, suggesting that complete substrate cleavage was not reached within the experimental time window at lower enzyme levels."*
 
 ---
 

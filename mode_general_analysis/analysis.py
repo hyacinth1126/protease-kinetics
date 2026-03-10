@@ -9,13 +9,37 @@ import numpy as np
 import pandas as pd
 from scipy.integrate import solve_ivp
 from scipy.optimize import curve_fit
-from dataclasses import dataclass
-from typing import Dict
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 import warnings
 
 # Suppress scipy optimization warnings
 warnings.filterwarnings('ignore', category=RuntimeWarning, module='scipy')
 warnings.filterwarnings('ignore', message='Covariance of the parameters could not be estimated')
+
+
+@dataclass
+class ProgressCurveFitResult:
+    """Single-concentration result from F(t) = F0 + (F∞ - F0)*(1 - exp(-k_obs*t))"""
+    conc: float
+    conc_unit: str  # 'ug/mL' or 'nM' or 'uM'
+    k_obs_per_s: float
+    k_obs_std: float
+    F0: float
+    F_inf: float
+    r_squared: float
+    n_points: int
+
+
+@dataclass
+class KobsVsELinearResult:
+    """Linear fit k_obs = slope * [E]_M + intercept (slope = k_cat/K_M in M^-1 s^-1)"""
+    slope_M_inv_s: float
+    slope_std: float
+    intercept_per_s: float
+    r_squared: float
+    E_M: np.ndarray
+    k_obs: np.ndarray
 
 
 @dataclass
@@ -182,6 +206,137 @@ class RegionDivider:
         return df_regions
 
 
+def fit_progress_curves_pseudo_first_order(
+    df: pd.DataFrame,
+    conc_col: str,
+    time_col: str = 'time_min',
+    fluor_col: str = 'FL_intensity',
+    enzyme_mw_kda: float = 56.6,
+    use_three_param: bool = True,
+) -> Tuple[List[ProgressCurveFitResult], Optional[KobsVsELinearResult]]:
+    """
+    Fit progress curve F(t) = F0 + (F∞ - F0)*(1 - exp(-k_obs*t)) per concentration,
+    then linear fit k_obs vs [E]. For reviewer: linearity supports pseudo-first-order kinetics.
+    
+    Time is converted to seconds internally; k_obs is returned in s^-1.
+    [E] for linear fit is in M (converted from μg/mL using enzyme_mw_kda if needed).
+    
+    Parameters
+    ----------
+    df : DataFrame with columns conc_col, time_col, fluor_col
+    conc_col : concentration column name (e.g. 'enzyme_ugml')
+    time_col : 'time_min' or 'time_s'; converted to seconds for fitting
+    fluor_col : fluorescence column (e.g. 'FL_intensity', 'RFU_Interpolated')
+    enzyme_mw_kda : for mass conc (μg/mL) -> molar conversion
+    use_three_param : if True, fit F(t) = F0 + (F∞ - F0)*(1 - exp(-k_obs*t)); else F(t) = F∞*(1 - exp(-k_obs*t))
+    
+    Returns
+    -------
+    list of ProgressCurveFitResult per concentration
+    KobsVsELinearResult or None if fewer than 2 concentrations succeeded
+    """
+    if fluor_col not in df.columns:
+        fluor_col = 'RFU_Interpolated' if 'RFU_Interpolated' in df.columns else 'RFU'
+    if conc_col not in df.columns or time_col not in df.columns:
+        return [], None
+    
+    # Time in seconds
+    if time_col == 'time_s':
+        df = df.copy()
+        df['_t_s'] = df[time_col].astype(float)
+    else:
+        df = df.copy()
+        df['_t_s'] = df[time_col].astype(float) * 60.0
+    
+    conc_unit = 'ug/mL'
+    if 'nM' in conc_col or 'uM' in conc_col:
+        conc_unit = 'nM' if 'nM' in conc_col else 'uM'
+    
+    def to_E_M(c: float) -> float:
+        if 'uM' in conc_col:
+            return c * 1e-6
+        if 'nM' in conc_col:
+            return c * 1e-9
+        return (c / enzyme_mw_kda) * 1e-6  # μg/mL -> M
+    
+    def model_three(t, F0, F_inf, k_obs):
+        return F0 + (F_inf - F0) * (1.0 - np.exp(-k_obs * t))
+    
+    def model_two(t, F_inf, k_obs):
+        return F_inf * (1.0 - np.exp(-k_obs * t))
+    
+    results: List[ProgressCurveFitResult] = []
+    for conc in sorted(df[conc_col].dropna().unique(), key=lambda x: float(x)):
+        sub = df[df[conc_col] == conc].sort_values('_t_s')
+        if len(sub) < 4:
+            continue
+        t = sub['_t_s'].values.astype(float)
+        F = sub[fluor_col].values.astype(float)
+        F_min, F_max = float(np.min(F)), float(np.max(F))
+        delta = max(F_max - F_min, 1.0)
+        t_span = max(t[-1] - t[0], 1e-6)
+        k_guess = 1.0 / max(t_span * 0.5, 1.0)
+        try:
+            if use_three_param:
+                p0 = [F_min, F_max, k_guess]
+                bounds = ([F_min - 0.1 * delta, F_min, 1e-6], [F_max + 0.1 * delta, F_max + 0.5 * delta, 1e2])
+                popt, pcov = curve_fit(model_three, t, F, p0=p0, bounds=bounds, maxfev=5000)
+                F0_fit, F_inf_fit, k_obs_fit = popt[0], popt[1], popt[2]
+                perr = np.sqrt(np.diag(pcov))
+                k_obs_std = perr[2] if len(perr) > 2 else 0.0
+            else:
+                p0 = [F_max, k_guess]
+                bounds = ([F_min * 0.9, 1e-6], [F_max * 1.5, 1e2])
+                popt, pcov = curve_fit(model_two, t, F, p0=p0, bounds=bounds, maxfev=5000)
+                F0_fit, F_inf_fit, k_obs_fit = F_min, popt[0], popt[1]
+                perr = np.sqrt(np.diag(pcov))
+                k_obs_std = perr[1] if len(perr) > 1 else 0.0
+            if k_obs_fit <= 0 or not np.isfinite(k_obs_fit):
+                continue
+            if use_three_param:
+                y_pred = model_three(t, F0_fit, F_inf_fit, k_obs_fit)
+            else:
+                y_pred = model_two(t, F_inf_fit, k_obs_fit)
+            ss_res = np.sum((F - y_pred) ** 2)
+            ss_tot = np.sum((F - np.mean(F)) ** 2)
+            r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else 0.0
+            results.append(ProgressCurveFitResult(
+                conc=float(conc),
+                conc_unit=conc_unit,
+                k_obs_per_s=float(k_obs_fit),
+                k_obs_std=float(k_obs_std),
+                F0=float(F0_fit),
+                F_inf=float(F_inf_fit),
+                r_squared=r2,
+                n_points=len(t),
+            ))
+        except Exception:
+            continue
+    
+    if len(results) < 2:
+        return results, None
+    
+    E_M = np.array([to_E_M(r.conc) for r in results])
+    k_obs_arr = np.array([r.k_obs_per_s for r in results])
+    coeffs = np.polyfit(E_M, k_obs_arr, 1)
+    slope, intercept = float(coeffs[0]), float(coeffs[1])
+    fit_vals = np.polyval(coeffs, E_M)
+    ss_res = np.sum((k_obs_arr - fit_vals) ** 2)
+    ss_tot = np.sum((k_obs_arr - np.mean(k_obs_arr)) ** 2)
+    r2_linear = float(1 - ss_res / ss_tot) if ss_tot > 0 else 0.0
+    n = len(E_M)
+    slope_std = float(np.sqrt(ss_res / (n - 2)) / np.sqrt(np.sum((E_M - np.mean(E_M)) ** 2))) if n > 2 else 0.0
+    linear_result = KobsVsELinearResult(
+        slope_M_inv_s=slope,
+        slope_std=slope_std,
+        intercept_per_s=intercept,
+        r_squared=r2_linear,
+        E_M=E_M,
+        k_obs=k_obs_arr,
+    )
+    return results, linear_result
+
+
 class DataNormalizer:
     """
     Step 3: Normalization (two stages)
@@ -289,23 +444,33 @@ class DataNormalizer:
         df_normalized = df_temp.groupby(self.conc_col, group_keys=False).apply(temp_normalize_group)
         return df_normalized
     
-    def normalize_final(self, df: pd.DataFrame, fitted_params: dict = None) -> pd.DataFrame:
+    def normalize_final(self, df: pd.DataFrame, fitted_params: dict = None, use_shared_Finf: bool = False) -> pd.DataFrame:
         """
         Stage 2: Final normalization using region information
         
         F0 = minimum fluorescence value (same as temporary) OR fitted F0 from Data Load mode
         Fmax = plateau region average (or F∞ from exponential region if no plateau) OR fitted Fmax from Data Load mode
+        If use_shared_Finf=True: Fmax = one common F_∞ for all concentrations (typical in papers).
         
         Parameters:
         - df: DataFrame with temporary normalization and region division
         - fitted_params: Optional dict mapping concentration to {'F0': float, 'Fmax': float}
                         from Data Load mode results. If provided, uses fitted values instead of region-based calculation.
+        - use_shared_Finf: If True, use a single F_∞ (Fmax) for all concentrations (complete cleavage signal same).
         
         Returns:
         - DataFrame with final alpha, F0, Fmax columns
         """
         self._detect_columns(df)
         df_final = df.copy()
+        
+        # When using shared F_∞, compute one value for all concentrations
+        F_inf_global = None
+        if use_shared_Finf:
+            if fitted_params is not None and len(fitted_params) > 0:
+                F_inf_global = max(float(fitted_params[c]['Fmax']) for c in fitted_params)
+            else:
+                F_inf_global = float(df_final[self.fluor_col].max())
         
         def final_normalize_group(g):
             g_sorted = g.sort_values(self.time_col)
@@ -383,11 +548,16 @@ class DataNormalizer:
                             Fmax = float(g_sorted[self.fluor_col].max())
                             region_used = 'fallback_max'
             
+            # Use shared F_∞ (same for all [E]) when requested (typical in papers)
+            if F_inf_global is not None:
+                Fmax = max(F_inf_global, F0 + 1.0)  # ensure denominator > 0
+                region_used = 'shared_Finf' if region_used == 'fitted_from_data_load' else 'shared_Finf (from data)'
+            
             # Ensure Fmax > F0
             if Fmax <= F0:
                 Fmax = F0 + 100
             
-            # Calculate final alpha
+            # Calculate final alpha: α(t) = (F_t - F0) / (F_∞ - F0)
             g = g_sorted.copy()
             g['alpha'] = (g[self.fluor_col] - F0) / (Fmax - F0)
             g['alpha'] = g['alpha'].clip(0, 1)
@@ -465,6 +635,7 @@ class ModelA_SubstrateDepletion:
         Returns:
         - ModelResults object or None if fitting fails
         """
+        self._last_fit_error = None
         # Use all data - no filtering
         df_fit = df.copy()
         
@@ -472,6 +643,7 @@ class ModelA_SubstrateDepletion:
             verbose_callback(f"Model A: 전체 {len(df_fit)}개 데이터 포인트 사용 (필터링 없음)")
         
         if len(df_fit) < 5:
+            self._last_fit_error = f"Not enough data points (need ≥5, got {len(df_fit)})."
             if verbose_callback:
                 verbose_callback(f"Model A: 피팅 데이터가 충분하지 않습니다. (사용 가능: {len(df_fit)}개)", level="error")
             return None
@@ -527,13 +699,14 @@ class ModelA_SubstrateDepletion:
                             kcat_KM_est = kobs_est / E_conc
                             kobs_estimates.append(kcat_KM_est)
             
+            # Bounds for kcat/KM (M⁻¹s⁻¹): optimizer and initial guess must stay inside
+            kcat_KM_low, kcat_KM_high = 1e2, 1e10
             if len(kobs_estimates) > 0:
                 kcat_KM_guess = np.median(kobs_estimates)
-                kcat_KM_guess = np.clip(kcat_KM_guess, 1e2, 1e10)
+                kcat_KM_guess = np.clip(kcat_KM_guess, kcat_KM_low, kcat_KM_high)
             else:
                 kcat_KM_guess = 1e5
-            
-            p0 = [kcat_KM_guess]
+            p0 = [float(kcat_KM_guess)]
             
             if verbose_callback:
                 verbose_callback(f"Model A 초기값: kcat/KM = {kcat_KM_guess:.2e} M⁻¹s⁻¹")
@@ -541,10 +714,10 @@ class ModelA_SubstrateDepletion:
             # Dummy x values (just indices)
             x_dummy = np.arange(len(y))
             
-            # Curve fit with wider bounds
+            # Curve fit: bounds must contain p0, so use same range for guess and bounds
             popt, pcov = curve_fit(
-                model_func, x_dummy, y, 
-                p0=p0, bounds=([1e3], [1e9]), maxfev=20000
+                model_func, x_dummy, y,
+                p0=p0, bounds=([kcat_KM_low], [kcat_KM_high]), maxfev=20000
             )
             
             kcat_KM_fit = popt[0]
@@ -600,6 +773,7 @@ class ModelA_SubstrateDepletion:
             )
             
         except Exception as e:
+            self._last_fit_error = str(e)
             if verbose_callback:
                 verbose_callback(f"Model A 피팅 오류: {str(e)}", level="error")
                 import traceback
