@@ -1785,6 +1785,8 @@ $F(t) = F_\\infty (1 - e^{-k_{\\mathrm{obs}} t})$
 
         if plot_items:
             st.markdown("### Plot Export (PNG)")
+            save_all_png_placeholder = st.empty()
+            save_all_png_placeholder.caption("Rendering PNG...")
             png_items = []
             failed_plot_count = 0
             ordered_plot_items = []
@@ -1813,22 +1815,36 @@ $F(t) = F_\\infty (1 - e^{-k_{\\mathrm{obs}} t})$
                         _dl_render_client_side_png_download(fig_for_export, ordered_plot_name, iframe_height=780)
 
             if png_items:
-                zip_buffer = BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for name, png_data in png_items:
-                        zf.writestr(f"{name}.png", png_data)
-                zip_buffer.seek(0)
-                st.download_button(
-                    label=f"📦 Save All PNG ({len(png_items)})",
-                    data=zip_buffer.getvalue(),
-                    file_name="model_simulation_plots.zip",
-                    mime="application/zip",
-                    key="general_export_all_png_zip",
-                )
-                if failed_plot_count > 0:
-                    _dl_render_client_side_download_all(ordered_plot_items, iframe_height=100)
+                if failed_plot_count == 0:
+                    zip_buffer = BytesIO()
+                    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                        for name, png_data in png_items:
+                            zf.writestr(f"{name}.png", png_data)
+                    zip_buffer.seek(0)
+                    with save_all_png_placeholder.container():
+                        st.download_button(
+                            label=f"📦 Save All PNG ({len(png_items)})",
+                            data=zip_buffer.getvalue(),
+                            file_name="model_simulation_plots.zip",
+                            mime="application/zip",
+                            key="general_export_all_png_zip",
+                        )
+                else:
+                    with save_all_png_placeholder.container():
+                        _dl_render_client_side_download_all(
+                            ordered_plot_items,
+                            iframe_height=74,
+                            compact=True,
+                            button_label=f"📥 Save All PNG ({len(ordered_plot_items)})",
+                        )
             else:
-                _dl_render_client_side_download_all(ordered_plot_items, iframe_height=100)
+                with save_all_png_placeholder.container():
+                    _dl_render_client_side_download_all(
+                        ordered_plot_items,
+                        iframe_height=74,
+                        compact=True,
+                        button_label=f"📥 Save All PNG ({len(ordered_plot_items)})",
+                    )
         else:
             st.info("No plot data available for export.")
 

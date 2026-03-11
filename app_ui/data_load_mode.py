@@ -1109,7 +1109,16 @@ def _render_client_side_png_download(fig, name: str, *, width=None, height=None,
     components.html(html, height=iframe_height, scrolling=False)
 
 
-def _render_client_side_download_all(fig_list, *, width=None, height=None, scale=None, iframe_height=110) -> None:
+def _render_client_side_download_all(
+    fig_list,
+    *,
+    width=None,
+    height=None,
+    scale=None,
+    iframe_height=110,
+    compact=False,
+    button_label="📥 Save All PNG",
+) -> None:
     """
     Export 탭 상단(기존 ZIP 버튼 자리)용.
     서버측 PNG 변환이 실패하는 환경(Cloud 등)에서 브라우저가 Plotly.downloadImage를 플롯별로 순차 실행.
@@ -1137,14 +1146,18 @@ def _render_client_side_download_all(fig_list, *, width=None, height=None, scale
     div_id = f"dlall_{abs(hash(tuple(item['name'] for item in payload))) % 10_000_000}"
     payload_json = json.dumps(payload)
 
+    status_text_align = "left" if compact else "right"
+    button_width = "auto" if compact else "100%"
+    button_font_size = "13px" if compact else "14px"
+    wrapper_justify = "flex-start" if compact else "flex-end"
     html = f"""
-<div id="{div_id}_status" style="text-align:right; font-size:12px; color: rgba(49,51,63,0.65); margin-bottom:4px; min-height:1.2em;"></div>
-<div style="display:flex; align-items:center; justify-content:flex-end; gap:10px;">
+<div id="{div_id}_status" style="text-align:{status_text_align}; font-size:12px; color: rgba(49,51,63,0.65); margin-bottom:4px; min-height:1.2em;"></div>
+<div style="display:flex; align-items:center; justify-content:{wrapper_justify}; gap:10px;">
   <button id="{div_id}_btn" style="
-    padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(49,51,63,0.25);
-    background: white; cursor: pointer; font-size: 14px; width: 100%;
+    padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(49,51,63,0.25);
+    background: white; cursor: pointer; font-size: {button_font_size}; width: {button_width};
   ">
-    📥 Save All PNG
+    {button_label}
   </button>
 </div>
 <div id="{div_id}_scratch" style="width:0;height:0;overflow:hidden;"></div>
