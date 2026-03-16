@@ -70,6 +70,71 @@ $$
 
 ---
 
+## 초기 속도 $v_0$ 정의 및 구간 (설명·Methods용)
+
+초기 속도는 **반응 초기 구간에서의 형광 증가율**이며, 아래 식과 구간 기준으로 정리할 수 있다.
+
+### 초기 속도 식
+
+**1. 선형 구간 기울기 (직접 피팅)**
+
+반응 초기에 형광이 시간에 비례한다고 가정하면
+$$
+F(t) = F_0 + v_0 \, t
+$$
+에서 **$v_0$ = 해당 구간의 선형 회귀 기울기** (단위: RFU/min 또는 RFU/s).
+
+**2. 지수 피팅에서 유도한 $v_0$**
+
+정규화 곡선 $F_{\mathrm{norm}}(t) = 1 - e^{-k_{\mathrm{obs}} t}$ 의 $t \to 0$ 접선은 $y = k_{\mathrm{obs}} \, t$ 이므로, 원시 형광 단위에서는
+$$
+v_0 = k_{\mathrm{obs}} \, (F_{\max} - F_0)
+$$
+(시간 단위가 min이면 $v_0$는 RFU/min, s이면 RFU/s.)
+
+**3. v₀ vs [E] 선형 피팅**
+
+기질 고정 시
+$$
+v_0 = \mathrm{slope} \cdot [E] + \mathrm{intercept}
+$$
+기울기 = $k_{\mathrm{cat}}[S]/(K_M + [S])$ (이론값).
+
+---
+
+### Plateau(전환율) 기준 — 초기 속도 구하는 시간 구간
+
+**전환율(conversion)** = plateau 대비 진행도:
+$$
+\mathrm{conversion}(t) = \frac{F(t) - F_0}{F_{\max} - F_0} \in [0,\, 1]
+$$
+
+**초기 선형 구간**은 기질 소모가 무시될 만큼 짧은 구간으로 정의한다. 코드에서는 다음을 사용한다.
+
+- **전환율 기준 (Data Load / 최적화 v₀)**  
+  **$\mathrm{conversion}(t) \le 10\%$** 인 시간 $t$ 까지만 사용하여 선형 회귀 $F(t) = F_0 + v_0 t$ 수행.  
+  (파라미터 `conversion_threshold=0.1`; 논문에서 흔히 “&lt;10% substrate conversion”으로 기술.)
+
+- **시간 구간 기준 (General Analysis — v₀ vs [E] by window)**  
+  **고정 시간 구간** 0–30 s, 0–1 min, 0–2 min, 0–3 min 중 데이터가 있는 범위에서 $(t,\, F)$ 선형 회귀 → 각 구간별 $v_0$.  
+  짧은 구간일수록 초기 속도에 가깝고, 구간이 길어지면 고농도에서 기질 소모로 선형성(R²)이 떨어질 수 있음.
+
+**정리 (Methods 문장 예시)**  
+*“Initial reaction velocities $v_0$ were determined from the initial linear region of the fluorescence increase (substrate conversion &lt;10%).”*  
+또는 *“$v_0$ was taken as the slope of the linear fit of $F(t)$ vs $t$ over the time window where $(F(t)-F_0)/(F_{\max}-F_0) \le 0.1$.”*
+
+---
+
+### 초기 선형 구간 접선 (정규화 공간)
+
+정규화 곡선 $F_{\mathrm{norm}}(t) = 1 - e^{-k_{\mathrm{obs}} t}$ 의 **$t=0$에서의 접선**:
+$$
+y = k_{\mathrm{obs}} \, t
+$$
+원시 형광으로 쓰면 $F(t) \approx F_0 + k_{\mathrm{obs}}(F_{\max}-F_0)\,t = F_0 + v_0 t$.
+
+---
+
 ## 1. Data Load 모드 — Export 플롯 (Enzyme 농도 변화)
 
 ### 1.1 Experimental_Results
@@ -242,6 +307,7 @@ $$
 
 | 플롯/출력 | 사용 식 |
 |-----------|---------|
+| **초기 속도 $v_0$** | 선형: $F(t)=F_0+v_0 t$ 기울기. 지수 유도: $v_0 = k_{\mathrm{obs}}(F_{\max}-F_0)$. 구간: conversion $\le 10\%$ 또는 고정 window (0–30 s, 0–1 min, …). |
 | Time-Fluorescence Interpolated | $F(t) = F_0 + v_0 t$ 또는 $F_0 + (F_{\max}-F_0)(1 - e^{-kt})$ |
 | Normalized exponential curves | $F_{\mathrm{norm}} = 1 - e^{-k_{\mathrm{obs}} t}$, $y = k_{\mathrm{obs}} t$ |
 | v₀ vs [E] | $v_0 = \mathrm{slope}\cdot [E] + \mathrm{intercept}$ |
