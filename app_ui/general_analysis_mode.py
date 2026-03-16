@@ -1472,6 +1472,53 @@ $F(t) = F_\\infty (1 - e^{-k_{\\mathrm{obs}} t})$
             st.error("❌ Alpha was not computed. Data normalization is required.")
             st.info("💡 Data is not normalized. Please check the data load and normalization steps.")
         else:
+            # 플롯 타겟 데이터 설명 및 미리보기 (비교용)
+            conc_col_alpha = 'enzyme_ugml' if 'enzyme_ugml' in df.columns else (df['conc_col_name'].iloc[0] if 'conc_col_name' in df.columns else None)
+            with st.expander("📌 플롯 타겟 데이터 (Plot target data — 비교용)", expanded=False):
+                st.markdown("""
+                **데이터 소스**  
+                플롯과 테이블(Alpha Statistics) 모두 **동일한 DataFrame `df`** 사용.
+                - 컬럼: `time_s`(시간), `alpha`(절단비율), 농도 컬럼(예: `enzyme_ugml`)
+                - `df` 생성 경로: Fitted Curves(보간 곡선) → 단위 표준화 → 정규화(α 계산)
+                """)
+                st.markdown("**플롯에 실제로 그려지는 값** (분 단위 점 + 꺾은선 모드)")
+                st.markdown("""
+                - **x**: 분 단위 그리드 `0, 1, 2, …, max(분)`
+                - **y**: 각 그리드 시간에서 `(time_s, alpha)`를 선형 보간한 α
+                - 즉 원본 `df`의 모든 `(time_s, alpha)`가 아니라 **정수 분 시점에서만** 보간된 α를 점으로 찍고 직선으로 연결.
+                """)
+                st.markdown("**테이블(Alpha mean)**")
+                st.markdown("""
+                - 해당 농도에서 **전체** `(time_s, alpha)` 행에 대한 **평균** = `df[농도].alpha.mean()`
+                - 플롯은 “분 단위 31개 점”만 쓰고, 테이블은 “모든 시간점”을 쓰므로, 시간점 개수/분포가 다르면 수치가 달라질 수 있음.
+                """)
+                if conc_col_alpha:
+                    # 분 단위 보간값 테이블 (플롯에 그려지는 (분, α) 일부만 표시)
+                    plot_target_rows = []
+                    for conc in sorted(df[conc_col_alpha].unique()):
+                        subset = df[df[conc_col_alpha] == conc].sort_values('time_s')
+                        t = subset['time_s'].values
+                        alpha = subset['alpha'].values
+                        if len(t) == 0:
+                            continue
+                        t_max = float(np.nanmax(t))
+                        if t_max <= 120:
+                            minute_grid = np.arange(0, int(np.ceil(t_max)) + 1, 1, dtype=float)
+                        else:
+                            n_minutes = int(np.ceil(t_max / 60))
+                            minute_grid = np.arange(0, n_minutes + 1, 1) * 60.0
+                        alpha_at_minutes = np.interp(minute_grid, t, alpha)
+                        for i, (tm, a) in enumerate(zip(minute_grid, alpha_at_minutes)):
+                            if i % 5 == 0 or i == len(minute_grid) - 1:  # 5분 간격 + 마지막 점만
+                                plot_target_rows.append({
+                                    f'Concentration ({conc_unit})': conc,
+                                    'Time (plot x)': tm,
+                                    'α (plot y)': round(a, 4)
+                                })
+                    if plot_target_rows:
+                        st.caption("플롯에 사용되는 (시간, α) 샘플 (5분 간격 + 마지막)")
+                        st.dataframe(pd.DataFrame(plot_target_rows), use_container_width=True, hide_index=True)
+            
             # Alpha vs Time Plot
             st.subheader("📊 Normalized Data: α(t) vs Time")
             
@@ -1479,7 +1526,8 @@ $F(t) = F_\\infty (1 - e^{-k_{\\mathrm{obs}} t})$
                                                        use_lines=True,
                                                        enzyme_name=enzyme_name,
                                                        substrate_name=substrate_name,
-                                                       experiment_type=experiment_type)
+                                                       experiment_type=experiment_type,
+                                                       points_every_minute=False)
             # 원본 시간 범위로 xaxis 설정
             original_time_max = st.session_state.get('original_time_max', df['time_s'].max())
             if time_unit == 'min':
@@ -1487,6 +1535,12 @@ $F(t) = F_\\infty (1 - e^{-k_{\\mathrm{obs}} t})$
             else:
                 fig_alpha.update_xaxes(range=[0, original_time_max])
             st.plotly_chart(fig_alpha, use_container_width=True)
+            # 색상–농도 매핑 명시 (혼동 방지): Plotly Set1 순서 = 농도 오름차순
+            conc_order = sorted(df[conc_col_alpha].unique()) if conc_col_alpha else []
+            if len(conc_order) <= 5:
+                color_names = ['빨강', '파랑', '초록', '보라', '주황'][:len(conc_order)]
+                mapping = ', '.join(f'{color_names[i]}={c}' for i, c in enumerate(conc_order))
+                st.caption(f"**색상–농도 매핑** (농도 오름차순): {mapping} {conc_unit}. 범례와 선 색상은 동일 기준입니다.")
             fig_alpha_export = go.Figure(fig_alpha)
             
             # Alpha Statistics
@@ -1496,15 +1550,47 @@ $F(t) = F_\\infty (1 - e^{-k_{\\mathrm{obs}} t})$
             
             if conc_col:
                 alpha_stats = []
+                # 실험(raw) 시간점 (분 기준): 0, 1, 5, 10, 15, 20, 25, 30
+                exp_times_min = np.array([0, 1, 5, 10, 15, 20, 25, 30], dtype=float)
+                # 현재 time 단위에 맞게 변환
+                current_time_unit = st.session_state.get('time_unit', 'min')
+                if current_time_unit == 's':
+                    exp_times_target = exp_times_min * 60.0
+                else:
+                    exp_times_target = exp_times_min
+                
                 for conc in sorted(df[conc_col].unique()):
-                    subset = df[df[conc_col] == conc]
+                    subset = df[df[conc_col] == conc].copy()
+                    alpha_all = subset['alpha'].dropna().values
+                    mean_all = float(alpha_all.mean()) if alpha_all.size > 0 else float('nan')
+                    std_all = float(alpha_all.std(ddof=0)) if alpha_all.size > 0 else float('nan')
+                    
+                    # 8개 실험 시간점에서의 α만 사용해 mean/std 계산
+                    times = subset['time_s'].values
+                    alpha_exp_points = []
+                    for t_target in exp_times_target:
+                        if times.size == 0:
+                            continue
+                        idx = int(np.argmin(np.abs(times - t_target)))
+                        alpha_exp_points.append(alpha_all[idx] if idx < alpha_all.size else subset['alpha'].iloc[idx])
+                    alpha_exp_points = np.array(alpha_exp_points, dtype=float)
+                    if alpha_exp_points.size > 0:
+                        mean_exp = float(alpha_exp_points.mean())
+                        std_exp = float(alpha_exp_points.std(ddof=0))
+                        mean_str = f"{mean_all:.4f} ({mean_exp:.4f})"
+                        std_str = f"{std_all:.4f} ({std_exp:.4f})"
+                    else:
+                        mean_str = f"{mean_all:.4f}"
+                        std_str = f"{std_all:.4f}"
+                    
                     alpha_stats.append({
                         f'Concentration ({conc_unit})': conc,
-                        'Alpha mean': f"{subset['alpha'].mean():.4f}",
-                        'Alpha std': f"{subset['alpha'].std():.4f}"
+                        'Alpha mean': mean_str,
+                        'Alpha std': std_str
                     })
                 
                 df_alpha_stats = pd.DataFrame(alpha_stats)
+                st.caption("괄호 안 값은 0, 1, 5, 10, 15, 20, 25, 30분 **8개 실험 시간점만 사용했을 때의 mean/std** 입니다.")
                 st.dataframe(df_alpha_stats, use_container_width=True, hide_index=True)
                 df_alpha_stats_export = df_alpha_stats.copy()
             

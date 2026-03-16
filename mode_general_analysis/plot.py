@@ -113,7 +113,8 @@ class Visualizer:
     
     @staticmethod
     def plot_normalized_data(df: pd.DataFrame, conc_unit: str = 'μg/mL', time_label: str = '시간 (초)', use_lines: bool = False,
-                            enzyme_name: str = 'enzyme', substrate_name: str = 'substrate', experiment_type: str = None):
+                            enzyme_name: str = 'enzyme', substrate_name: str = 'substrate', experiment_type: str = None,
+                            points_every_minute: bool = False):
         """Plot normalized data (fraction cleaved)
         
         Args:
@@ -124,6 +125,7 @@ class Visualizer:
             enzyme_name: Custom name for enzyme (default: 'enzyme')
             substrate_name: Custom name for substrate (default: 'substrate')
             experiment_type: Experiment type ("Substrate 농도 변화 (표준 MM)" or "Enzyme 농도 변화")
+            points_every_minute: If True, resample to integer minutes and plot as points + line segments (꺾은선)
         """
         fig = go.Figure()
         
@@ -143,23 +145,61 @@ class Visualizer:
         concentrations = sorted(df[conc_col].unique())
         
         for idx, conc in enumerate(concentrations):
-            subset = df[df[conc_col] == conc]
+            subset = df[df[conc_col] == conc].sort_values('time_s')
             color = colors[idx % len(colors)]
+            t = subset['time_s'].values
+            alpha = subset['alpha'].values
             
-            # Plot data points (markers or lines)
-            plot_mode = 'lines' if use_lines else 'markers'
-            marker_dict = dict(size=8, color=color) if not use_lines else None
-            line_dict = dict(color=color, width=2.5) if use_lines else None
-            
-            fig.add_trace(go.Scatter(
-                x=subset['time_s'],
-                y=subset['alpha'],
-                mode=plot_mode,
-                name=f'{entity_name} {conc} {conc_unit}',
-                marker=marker_dict if marker_dict else None,
-                line=line_dict if line_dict else None,
-                legendgroup=f'group{idx}'
-            ))
+            if points_every_minute and len(t) > 0:
+                # 분 단위 점만 사용, 직선으로 연결 (꺾은선, 스무스 곡선 아님)
+                t_max = float(np.nanmax(t))
+                if t_max <= 120:
+                    minute_grid = np.arange(0, int(np.ceil(t_max)) + 1, 1, dtype=float)
+                else:
+                    n_minutes = int(np.ceil(t_max / 60))
+                    minute_grid = np.arange(0, n_minutes + 1, 1) * 60.0
+                alpha_at_minutes = np.interp(minute_grid, t, alpha)
+                x_plot = minute_grid
+                y_plot = alpha_at_minutes
+                # 선: 꺾은선만
+                fig.add_trace(go.Scatter(
+                    x=x_plot,
+                    y=y_plot,
+                    mode='lines',
+                    name=f'{entity_name} {conc} {conc_unit}',
+                    line=dict(color=color, width=2, shape='linear'),
+                    legendgroup=f'group{idx}'
+                ))
+                # 점: 분 단위 마커 (나중에 그려서 선 위에 보이게)
+                fig.add_trace(go.Scatter(
+                    x=x_plot,
+                    y=y_plot,
+                    mode='markers',
+                    name=f'{entity_name} {conc} {conc_unit}',
+                    marker=dict(
+                        size=10,
+                        color=color,
+                        line=dict(width=2, color='white'),
+                        symbol='circle'
+                    ),
+                    legendgroup=f'group{idx}',
+                    showlegend=False
+                ))
+            else:
+                x_plot = t
+                y_plot = alpha
+                plot_mode = 'lines' if use_lines else 'markers'
+                marker_dict = dict(size=8, color=color) if not use_lines else None
+                line_dict = dict(color=color, width=2.5, shape='linear') if use_lines else None
+                fig.add_trace(go.Scatter(
+                    x=x_plot,
+                    y=y_plot,
+                    mode=plot_mode,
+                    name=f'{entity_name} {conc} {conc_unit}',
+                    marker=marker_dict if marker_dict is not None else None,
+                    line=line_dict if line_dict is not None else None,
+                    legendgroup=f'group{idx}'
+                ))
         
         fig.update_layout(
             title='정규화 데이터: 절단 비율 α(t)',
