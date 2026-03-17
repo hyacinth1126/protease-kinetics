@@ -28,6 +28,12 @@ def read_raw_data(filename='mode_prep_raw_data/raw.csv'):
     2. 새로운 형식 (쉼표 구분):
        - 첫 번째 행: 헤더 (concentration_uM, min, RFU_min, SD, N)
        - 데이터: 각 행이 농도, 시간, RFU, SD, N
+    
+    Blank (PBS) for LOD/LOQ (optional):
+       - 새 형식: 컬럼명 'Blank' 또는 'PBS' → blank 평균. 선택으로 'Blank_SD' 또는 'PBS_SD' → 한 지점 mean/SD 그대로 사용 (0,1,5,10,15,20,25,30 min 중 한 시점만 넣어도 됨).
+       - SD 컬럼 없으면 기존처럼 Blank 컬럼 값들로 mean·표준편차 계산.
+       - 구 형식: 마지막에 남는 1개 컬럼이 있으면 blank 값으로 사용.
+       - 결과에 data['_blank'] = {'mean', 'sd', 'n', 'values'} 로 저장됨 (피팅 시 제외).
     """
     # 파일 확장자 확인
     file_extension = filename.split('.')[-1].lower()
@@ -94,11 +100,16 @@ def read_raw_data(filename='mode_prep_raw_data/raw.csv'):
     
     while i < len(df.columns):
         # 농도 값은 첫 번째 행에서 가져옴 (mean, SD, N 중 mean 위치)
-        if conc_idx < len(concentration_row):
-            conc_value = float(concentration_row[conc_idx * 3])  # 각 농도의 첫 번째 값 (mean 위치)
-        else:
-            conc_value = float(concentration_row[conc_idx * 3]) if len(concentration_row) > conc_idx * 3 else conc_idx
-        
+        try:
+            if conc_idx < len(concentration_row):
+                raw_conc = concentration_row[conc_idx * 3]
+                if pd.isna(raw_conc) or str(raw_conc).strip() == '':
+                    break  # 빈 셀: 농도 블록 끝, 남은 컬럼은 Blank용
+                conc_value = float(raw_conc)
+            else:
+                break
+        except (ValueError, TypeError):
+            break
         # 컬럼명 생성
         conc_name = f"{conc_value} ug/mL"
         
@@ -147,6 +158,52 @@ def read_raw_data(filename='mode_prep_raw_data/raw.csv'):
         i += 3
         conc_idx += 1
     
+    # Optional blank column(s) at the end: 1 column (blank values) or 2 (Blank + Blank_SD)
+    if i < len(df.columns):
+        blank_vals = []
+        if i + 1 <= len(df.columns):
+            col_vals = pd.to_numeric(df.iloc[:, i].values, errors='coerce')
+            blank_vals = col_vals[~pd.isna(col_vals)]
+        use_mean = float(np.mean(blank_vals)) if len(blank_vals) > 0 else None
+        use_sd = float(np.std(blank_vals, ddof=1)) if len(blank_vals) > 1 else 0.0
+        use_n = len(blank_vals)
+        # Second column Blank_SD / PBS_SD: use first valid (mean, sd) pair
+        if i + 2 <= len(df.columns):
+            col2_name = str(df.columns[i + 1]).strip().lower()
+            if 'blank_sd' in col2_name or 'pbs_sd' in col2_name or col2_name == 'blank sd' or col2_name == 'pbs sd':
+                sd_vals = pd.to_numeric(df.iloc[:, i + 1].values, errors='coerce')
+                for row_idx in range(len(df)):
+                    m = pd.to_numeric(df.iloc[row_idx, i], errors='coerce')
+                    s = sd_vals[row_idx] if np.isscalar(sd_vals[row_idx]) else (sd_vals.iloc[row_idx] if hasattr(sd_vals, 'iloc') else np.nan)
+                    if pd.notna(m) and pd.notna(s):
+                        use_mean = float(m)
+                        use_sd = float(s)
+                        use_n = 1
+                        break
+                # Third column Blank_N / PBS_N: use first valid n
+                if i + 3 <= len(df.columns):
+                    col3_name = str(df.columns[i + 2]).strip().lower()
+                    if 'blank_n' in col3_name or 'pbs_n' in col3_name or col3_name == 'blank n' or col3_name == 'pbs n':
+                        n_vals = pd.to_numeric(df.iloc[:, i + 2].values, errors='coerce')
+                        if hasattr(n_vals, 'shape'):
+                            n_arr = np.asarray(n_vals)
+                            for row_idx in range(min(len(df), len(n_arr))):
+                                n_val = n_arr[row_idx]
+                                if pd.notna(n_val) and not pd.isna(n_val):
+                                    use_n = int(n_val)
+                                    break
+                        else:
+                            n_val = n_vals
+                            if pd.notna(n_val) and not pd.isna(n_val):
+                                use_n = int(n_val)
+        if use_mean is not None and not (pd.isna(use_mean)):
+            data['_blank'] = {
+                'values': np.array(blank_vals) if len(blank_vals) > 0 else np.array([use_mean]),
+                'mean': float(use_mean),
+                'sd': float(use_sd),
+                'n': use_n,
+            }
+    
     return data
 
 
@@ -163,6 +220,8 @@ def _read_new_format_csv(df):
     rfu_col = None
     sd_col = None
     
+    blank_col = None
+    blank_sd_col = None
     for col in df.columns:
         col_lower = col.lower()
         # 더 구체적인 매칭 (순서 중요)
@@ -174,6 +233,11 @@ def _read_new_format_csv(df):
             conc_col = col
         elif col_lower == 'sd' or col_lower == 'std' or 'standard' in col_lower:
             sd_col = col
+        elif ('blank_sd' in col_lower or 'pbs_sd' in col_lower or col_lower == 'blank_sd' or col_lower == 'pbs_sd' or
+              col_lower == 'blank sd' or col_lower == 'pbs sd'):
+            blank_sd_col = col
+        elif 'blank' in col_lower or col_lower == 'pbs' or 'pbs' in col_lower or 'blank_rfu' in col_lower or 'rfu_blank' in col_lower:
+            blank_col = col
     
     # 컬럼명이 정확히 일치하는 경우 우선 처리
     if 'min' in df.columns:
@@ -184,6 +248,14 @@ def _read_new_format_csv(df):
         rfu_col = 'RFU_min'
     if 'SD' in df.columns:
         sd_col = 'SD'
+    if blank_col is None and 'blank' in df.columns:
+        blank_col = 'blank'
+    if blank_col is None and 'PBS' in df.columns:
+        blank_col = 'PBS'
+    if blank_sd_col is None and 'PBS_SD' in df.columns:
+        blank_sd_col = 'PBS_SD'
+    if blank_sd_col is None and 'Blank_SD' in df.columns:
+        blank_sd_col = 'Blank_SD'
     
     if conc_col is None or time_col is None or rfu_col is None:
         raise ValueError(f"필수 컬럼을 찾을 수 없습니다. 발견된 컬럼: {df.columns.tolist()}")
@@ -235,7 +307,81 @@ def _read_new_format_csv(df):
                 'conc_name': conc_name
             }
     
+    # Optional blank (PBS) column: mean (and optionally Blank_SD/PBS_SD) for LOD/LOQ
+    # 한 지점만 넣는 경우: PBS 컬럼에 mean, PBS_SD 컬럼에 sd 를 주면 그대로 사용
+    if blank_col is not None and blank_col in df.columns:
+        blank_vals = pd.to_numeric(df[blank_col].values, errors='coerce')
+        blank_vals = blank_vals[~pd.isna(blank_vals)]
+        if len(blank_vals) > 0:
+            use_mean = float(np.mean(blank_vals))
+            use_sd = 0.0
+            use_n = len(blank_vals)
+            if blank_sd_col is not None and blank_sd_col in df.columns:
+                sd_vals = pd.to_numeric(df[blank_sd_col].values, errors='coerce')
+                # 첫 번째로 유효한 (blank, blank_sd) 쌍 사용 (한 지점 mean/SD)
+                for i in range(len(df)):
+                    m = pd.to_numeric(df[blank_col].iloc[i], errors='coerce')
+                    s = sd_vals[i] if hasattr(sd_vals, '__getitem__') else (sd_vals.iloc[i] if hasattr(sd_vals, 'iloc') else np.nan)
+                    if pd.notna(m) and pd.notna(s):
+                        use_mean = float(m)
+                        use_sd = float(s)
+                        use_n = 1  # 한 지점에서 준 (mean, sd)
+                        break
+            else:
+                use_sd = float(np.std(blank_vals, ddof=1)) if len(blank_vals) > 1 else 0.0
+            data['_blank'] = {
+                'values': blank_vals,
+                'mean': use_mean,
+                'sd': use_sd,
+                'n': use_n,
+            }
+    
     return data
+
+
+def compute_lod_loq_signal(blank_mean, blank_sd, k_lod=3, k_loq=10):
+    """
+    LOD/LOQ in signal space (e.g. RFU or v0).
+    LOD = blank_mean + k_lod * blank_sd, LOQ = blank_mean + k_loq * blank_sd.
+    If blank_sd is 0 (single replicate), LOD_signal = LOQ_signal = blank_mean.
+    """
+    blank_mean = float(blank_mean)
+    blank_sd = float(blank_sd) if blank_sd is not None else 0.0
+    if blank_sd <= 0:
+        return blank_mean, blank_mean
+    lod_signal = blank_mean + k_lod * blank_sd
+    loq_signal = blank_mean + k_loq * blank_sd
+    return lod_signal, loq_signal
+
+
+def compute_lod_loq_concentration_from_linear(lod_signal, loq_signal, slope, intercept):
+    """
+    Convert LOD/LOQ from signal (e.g. v0) to concentration using linear calibration:
+    signal = slope * concentration + intercept  =>  concentration = (signal - intercept) / slope.
+    Returns (LOD_conc, LOQ_conc) or (None, None) if slope <= 0.
+    """
+    slope = float(slope)
+    intercept = float(intercept)
+    if slope <= 0:
+        return None, None
+    lod_conc = (float(lod_signal) - intercept) / slope
+    loq_conc = (float(loq_signal) - intercept) / slope
+    # Negative concentration is not meaningful; clip to 0 or return as-is (user can interpret)
+    return max(0.0, lod_conc), max(0.0, loq_conc)
+
+
+def compute_lod_loq_from_residual(residual_std, slope, k_lod=3, k_loq=10):
+    """
+    When blank has only one replicate (no blank_sd), estimate LOD/LOQ in concentration
+    from calibration curve: LOD_conc = k_lod * (residual_std / slope), LOQ_conc = k_loq * (residual_std / slope).
+    """
+    if slope is None or float(slope) <= 0 or residual_std is None or float(residual_std) < 0:
+        return None, None
+    slope = float(slope)
+    residual_std = float(residual_std)
+    lod_conc = k_lod * (residual_std / slope)
+    loq_conc = k_loq * (residual_std / slope)
+    return max(0.0, lod_conc), max(0.0, loq_conc)
 
 
 def calculate_initial_velocity_optimized(times, values, min_points=3, conversion_threshold=0.1, skip_initial_points=0):
@@ -555,8 +701,11 @@ def main():
     print("\n1️⃣ Raw data 파일 읽는 중...")
     try:
         raw_data = read_raw_data('mode_prep_raw_data/raw.csv')
-        print(f"   ✅ {len(raw_data)}개 농도 조건 발견")
+        n_conc = len([k for k in raw_data if k != '_blank'])
+        print(f"   ✅ {n_conc}개 농도 조건 발견")
         for conc_name, data in raw_data.items():
+            if conc_name == '_blank':
+                continue
             print(f"      - {conc_name}: {len(data['time'])}개 데이터 포인트")
     except Exception as e:
         print(f"   ❌ 오류: {e}")
@@ -570,6 +719,8 @@ def main():
     all_fit_data = []
     
     for conc_name, data in raw_data.items():
+        if conc_name == '_blank':
+            continue
         times = data['time']
         values = data['value']
         

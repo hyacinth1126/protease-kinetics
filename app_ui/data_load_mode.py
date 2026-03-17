@@ -104,7 +104,10 @@ from mode_prep_raw_data.prep import (
     fit_time_course,
     fit_calibration_curve,
     michaelis_menten_calibration,
-    calculate_initial_velocity
+    calculate_initial_velocity,
+    compute_lod_loq_signal,
+    compute_lod_loq_concentration_from_linear,
+    compute_lod_loq_from_residual,
 )
 _debug_log("module load: mode_prep_raw_data.prep done")
 
@@ -442,7 +445,7 @@ def _build_interpolated_curves_fig(results):
     )
     fig_mm.update_xaxes(range=[x_min - x_margin, x_max + x_margin])
     if exp_type == "Enzyme Concentration Variation (Fixed substrate)" and results.get('raw_data'):
-        all_y_mm = [v for d in results['raw_data'].values() for v in d['value']]
+        all_y_mm = [v for d in results['raw_data'].values() if 'value' in d for v in d['value']]
         y_max_mm = max(all_y_mm) if all_y_mm else 1
         y_pad_bottom_mm = max(0.02 * y_max_mm, 50)
         fig_mm.update_yaxes(range=[-y_pad_bottom_mm, y_max_mm * 1.02])
@@ -570,7 +573,7 @@ def _build_exponential_increase_interp_fig(
     x_range = [x_min_data - x_margin, x_max_global + x_margin]
     fig_mm.update_xaxes(range=x_range)
     if exp_type == "Enzyme Concentration Variation (Fixed substrate)" and results.get('raw_data'):
-        all_y_mm = [v for d in results['raw_data'].values() for v in d['value']]
+        all_y_mm = [v for d in results['raw_data'].values() if 'value' in d for v in d['value']]
         y_max_mm = max(all_y_mm) if all_y_mm else 1
         y_pad_bottom_mm = max(0.02 * y_max_mm, 50)
         y_range = [-y_pad_bottom_mm, y_max_mm * 1.02]
@@ -1440,7 +1443,7 @@ def data_load_mode(st):
     uploaded_file = st.sidebar.file_uploader(
         "Upload Prep Raw Data File (CSV or XLSX)",
         type=['csv', 'xlsx'],
-        help="prep_raw.csv/xlsx format: Time, concentration values, SD, replicates (3 columns each)"
+        help="Prep raw: Time, concentration values, SD, replicates. Optional: add a 'Blank' or 'PBS' column (one or more values) for LOD/LOQ."
     )
     
     # 샘플 데이터 다운로드 (XLSX 형태로 제공, 실험 타입에 따라 다른 파일)
@@ -1529,8 +1532,9 @@ def data_load_mode(st):
     # Data preview
     st.subheader("📋 Data Preview")
     
-    # 반응 시간 계산 (최대값)
-    all_times = [time_val for data in raw_data.values() for time_val in data['time']] if raw_data else []
+    # 반응 시간 계산 (최대값); _blank는 농도 시리즈가 아니므로 제외
+    _conc_only = {k: v for k, v in (raw_data or {}).items() if k != '_blank'}
+    all_times = [time_val for data in _conc_only.values() for time_val in data['time']] if _conc_only else []
     reaction_time = f"{max(all_times):.0f} min" if all_times else "N/A"
     
     # N 값 읽기
@@ -1562,8 +1566,8 @@ def data_load_mode(st):
         st.error("Unable to load data. Please upload a CSV or XLSX file.")
         return
     
-    # Calculate number of data points per concentration (same for all concentrations)
-    sorted_conc = sorted(raw_data.items(), key=lambda x: x[1]['concentration'])
+    # Calculate number of data points per concentration (same for all concentrations); exclude _blank
+    sorted_conc = sorted(_conc_only.items(), key=lambda x: x[1]['concentration'])
     num_data_points = len(sorted_conc[0][1]['time']) if len(sorted_conc) > 0 else 0
     
     col1, col2, col3, col4 = st.columns(4)
@@ -1575,6 +1579,11 @@ def data_load_mode(st):
         st.metric("Reaction Time", reaction_time)
     with col4:
         st.metric("N (Number of Replicates)", n_value)
+    
+    # Blank (PBS) for LOD/LOQ
+    if raw_data and raw_data.get('_blank') is not None:
+        bl = raw_data['_blank']
+        st.caption(f"Blank (PBS): n={bl['n']}, mean={bl['mean']:.2f}, SD={bl['sd']:.2f} → LOD/LOQ will be computed after fitting.")
     
     # Display concentration-specific information
     with st.expander("Concentration Data Information", expanded=False):
@@ -1633,6 +1642,8 @@ def data_load_mode(st):
                 all_fit_data = []
                 
                 for conc_name, data in raw_data.items():
+                    if conc_name == '_blank':
+                        continue
                     times = data['time']
                     values = data['value']
                     
@@ -1690,7 +1701,7 @@ def data_load_mode(st):
                 # 2. Calculate interpolation range
                 status_text.text("2️⃣ Calculating interpolation range...")
                 
-                all_times = [time_val for data in raw_data.values() for time_val in data['time']]
+                all_times = [time_val for data in _conc_only.values() for time_val in data['time']]
                 x_data_min = min(all_times)
                 x_data_max = max(all_times)
                 # 원본 데이터 범위만 사용 (Prism 확장 범위 사용 안 함)
@@ -1965,6 +1976,8 @@ def data_load_mode(st):
                 norm_v0_values = {}
                 
                 for conc_name, data in raw_data.items():
+                    if conc_name == '_blank':
+                        continue
                     times = data['time']
                     values = data['value']
                     
@@ -2106,6 +2119,30 @@ def data_load_mode(st):
                                 'slope': slope,
                                 'intercept': intercept
                             }
+                            # Residual std for LOD/LOQ from calibration curve
+                            n_pts = len(norm_v0_list)
+                            if n_pts > 2:
+                                ss_res = np.sum((np.array(norm_v0_list) - v0_fitted) ** 2)
+                                residual_std = float(np.sqrt(ss_res / (n_pts - 2)))
+                                mm_fit_results['residual_std'] = residual_std
+                            # LOD/LOQ from blank (if present) and from calibration
+                            blank_info = raw_data.get('_blank')
+                            if blank_info is not None:
+                                lod_sig, loq_sig = compute_lod_loq_signal(blank_info['mean'], blank_info['sd'])
+                                mm_fit_results['blank_mean'] = blank_info['mean']
+                                mm_fit_results['blank_sd'] = blank_info['sd']
+                                mm_fit_results['blank_n'] = blank_info['n']
+                                mm_fit_results['LOD_signal'] = lod_sig
+                                mm_fit_results['LOQ_signal'] = loq_sig
+                                lod_conc, loq_conc = compute_lod_loq_concentration_from_linear(lod_sig, loq_sig, slope, intercept)
+                                if lod_conc is not None:
+                                    mm_fit_results['LOD_conc'] = lod_conc
+                                    mm_fit_results['LOQ_conc'] = loq_conc
+                            if mm_fit_results.get('residual_std') is not None and slope is not None and slope > 0:
+                                lod_r, loq_r = compute_lod_loq_from_residual(mm_fit_results['residual_std'], slope)
+                                if lod_r is not None:
+                                    mm_fit_results['LOD_conc_from_residual'] = lod_r
+                                    mm_fit_results['LOQ_conc_from_residual'] = loq_r
                         except Exception as e:
                             st.warning(f"⚠️ Normalization-based linear fitting failed: {e}")
                             mm_fit_success = False
@@ -2157,9 +2194,10 @@ def data_load_mode(st):
                 
             # Session state에 저장 (정규화 기반 v0 사용)
             # Data Preview와 동일한 값 저장 → Model Simulation에서 그대로 표시
-            sorted_conc_for_meta = sorted(raw_data.items(), key=lambda x: x[1]['concentration'])
+            _meta_conc = {k: v for k, v in raw_data.items() if k != '_blank'}
+            sorted_conc_for_meta = sorted(_meta_conc.items(), key=lambda x: x[1]['concentration'])
             data_points_per_conc = len(sorted_conc_for_meta[0][1]['time']) if sorted_conc_for_meta else 0
-            all_times_meta = [t for data in raw_data.values() for t in data['time']]
+            all_times_meta = [t for data in _meta_conc.values() for t in data['time']]
             reaction_time_max_min = max(all_times_meta) if all_times_meta else None
             st.session_state['interpolation_results'] = {
                 'interp_df': interp_df,
@@ -2259,6 +2297,22 @@ def data_load_mode(st):
                     - **Vmax**: Standard Michaelis-Menten definition requires [E] fixed
                     - **kcat**: Cannot be determined alone (only kcat/Km possible)
                     """)
+                    # LOD/LOQ (when blank column was provided or from calibration residual)
+                    if mm_fit.get('LOD_conc') is not None or mm_fit.get('LOD_conc_from_residual') is not None:
+                        st.markdown("**LOD / LOQ**")
+                        lod_loq_col1, lod_loq_col2 = st.columns(2)
+                        with lod_loq_col1:
+                            if mm_fit.get('blank_mean') is not None:
+                                st.caption("From blank (PBS)")
+                                st.write(f"Blank: mean = {mm_fit['blank_mean']:.2f}, SD = {mm_fit.get('blank_sd', 0):.2f} (n={mm_fit.get('blank_n', 0)})")
+                                if mm_fit.get('LOD_signal') is not None:
+                                    st.write(f"LOD (signal) = {mm_fit['LOD_signal']:.2f}, LOQ (signal) = {mm_fit['LOQ_signal']:.2f} (RFU/min)")
+                                if mm_fit.get('LOD_conc') is not None:
+                                    st.write(f"**LOD ([E]) = {mm_fit['LOD_conc']:.4f}**, **LOQ ([E]) = {mm_fit['LOQ_conc']:.4f}** (μg/mL)")
+                        with lod_loq_col2:
+                            if mm_fit.get('LOD_conc_from_residual') is not None:
+                                st.caption("From calibration residual (3σ / slope)")
+                                st.write(f"**LOD ([E]) = {mm_fit['LOD_conc_from_residual']:.4f}**, **LOQ ([E]) = {mm_fit['LOQ_conc_from_residual']:.4f}** (μg/mL)")
             elif 'mm_fit_results' in results:
                 st.warning("⚠️ MM fitting failed or insufficient data")
             
@@ -2429,7 +2483,7 @@ def data_load_mode(st):
                 fig.update_xaxes(range=[x_min - x_margin, x_max + x_margin])
                 # ENZYME 모드: Y=0에서 점이 잘리지 않도록 Y축 하단 여유
                 if exp_type == "Enzyme Concentration Variation (Fixed substrate)" and 'raw_data' in results and results['raw_data']:
-                    all_y = [v for d in results['raw_data'].values() for v in d['value']]
+                    all_y = [v for d in results['raw_data'].values() if 'value' in d for v in d['value']]
                     y_max_data = max(all_y) if all_y else 1
                     y_pad_bottom = max(0.02 * y_max_data, 50)
                     fig.update_yaxes(range=[-y_pad_bottom, y_max_data * 1.02])
@@ -2532,7 +2586,7 @@ def data_load_mode(st):
                     fig_mm.update_xaxes(range=[x_min - x_margin, x_max + x_margin])
                     # ENZYME 모드: Y=0에서 점이 잘리지 않도록 Y축 하단 여유
                     if exp_type == "Enzyme Concentration Variation (Fixed substrate)" and 'raw_data' in results and results['raw_data']:
-                        all_y_mm = [v for d in results['raw_data'].values() for v in d['value']]
+                        all_y_mm = [v for d in results['raw_data'].values() if 'value' in d for v in d['value']]
                         y_max_mm = max(all_y_mm) if all_y_mm else 1
                         y_pad_bottom_mm = max(0.02 * y_max_mm, 50)
                         fig_mm.update_yaxes(range=[-y_pad_bottom_mm, y_max_mm * 1.02])
@@ -3249,6 +3303,25 @@ def data_load_mode(st):
                     fig_v0 = _apply_display_layout_like_export(fig_v0)
                     st.plotly_chart(fig_v0, use_container_width=True)
 
+                    # LOD/LOQ for Full linear fit (이 플롯에 대응)
+                    if exp_type != "Substrate Concentration Variation (Standard Michaelis-Menten)" and (
+                        mm_fit.get('LOD_conc') is not None or mm_fit.get('LOD_conc_from_residual') is not None
+                    ):
+                        st.markdown("**LOD / LOQ (Full linear fit)**")
+                        full_lod_c1, full_lod_c2 = st.columns(2)
+                        with full_lod_c1:
+                            if mm_fit.get('blank_mean') is not None:
+                                st.caption("From blank (PBS)")
+                                st.write(f"Blank: mean = {mm_fit['blank_mean']:.2f}, SD = {mm_fit.get('blank_sd', 0):.2f} (n={mm_fit.get('blank_n', 0)})")
+                                if mm_fit.get('LOD_signal') is not None:
+                                    st.write(f"LOD (signal) = {mm_fit['LOD_signal']:.2f}, LOQ (signal) = {mm_fit['LOQ_signal']:.2f} (RFU/min)")
+                                if mm_fit.get('LOD_conc') is not None:
+                                    st.write(f"**LOD ([E]) = {mm_fit['LOD_conc']:.4f}**, **LOQ ([E]) = {mm_fit['LOQ_conc']:.4f}** (μg/mL)")
+                        with full_lod_c2:
+                            if mm_fit.get('LOD_conc_from_residual') is not None:
+                                st.caption("From calibration residual (3σ / slope)")
+                                st.write(f"**LOD ([E]) = {mm_fit['LOD_conc_from_residual']:.4f}**, **LOQ ([E]) = {mm_fit['LOQ_conc_from_residual']:.4f}** (μg/mL)")
+
                     # 전체 선형 피팅 R²가 낮은 경우(기준 0.8): 최저 농도 3개만 사용한 보조 선형 피팅 추가 표시
                     if exp_type != "Substrate Concentration Variation (Standard Michaelis-Menten)":
                         r2_full = mm_fit.get('R_squared')
@@ -3349,6 +3422,40 @@ def data_load_mode(st):
                             fig_v0_low3 = _apply_display_layout_like_export(fig_v0_low3)
                             st.info("Overall linear fit R² is below 0.8. Showing supplementary low-3 linear fit and (if 5 points exist) a constant fit for 3rd-5th [E].")
                             st.plotly_chart(fig_v0_low3, use_container_width=True)
+
+                            # LOD/LOQ for Low-3 linear fit (이 플롯에 대응)
+                            st.markdown("**LOD / LOQ (Low-3 linear fit)**")
+                            lod_sig = mm_fit.get('LOD_signal')
+                            loq_sig = mm_fit.get('LOQ_signal')
+                            low3_lod_c1, low3_lod_c2 = st.columns(2)
+                            with low3_lod_c1:
+                                if lod_sig is not None and loq_sig is not None and low3_slope is not None and low3_slope > 0:
+                                    lod_conc_l3, loq_conc_l3 = compute_lod_loq_concentration_from_linear(lod_sig, loq_sig, low3_slope, low3_intercept)
+                                    if lod_conc_l3 is not None:
+                                        st.caption("From blank (PBS) + Low-3 slope/intercept")
+                                        if mm_fit.get('blank_mean') is not None:
+                                            st.write(f"Blank: mean = {mm_fit['blank_mean']:.2f}, SD = {mm_fit.get('blank_sd', 0):.2f}")
+                                        st.write(f"**LOD ([E]) = {lod_conc_l3:.4f}**, **LOQ ([E]) = {loq_conc_l3:.4f}** (μg/mL)")
+                                    else:
+                                        st.caption("From blank (PBS) + Low-3 slope/intercept")
+                                        st.write("(Not computed: slope ≤ 0)")
+                                else:
+                                    st.caption("From blank (PBS)")
+                                    st.write("Blank or Low-3 slope not available.")
+                            with low3_lod_c2:
+                                # residual std for Low-3: n=3, df=n-2=1
+                                if low3_slope is not None and low3_slope > 0 and ss_res_low3 is not None:
+                                    residual_std_low3 = float(np.sqrt(ss_res_low3 / 1.0)) if ss_res_low3 >= 0 else 0.0
+                                    lod_r_l3, loq_r_l3 = compute_lod_loq_from_residual(residual_std_low3, low3_slope)
+                                    if lod_r_l3 is not None:
+                                        st.caption("From Low-3 fit residual (3σ / slope)")
+                                        st.write(f"**LOD ([E]) = {lod_r_l3:.4f}**, **LOQ ([E]) = {loq_r_l3:.4f}** (μg/mL)")
+                                    else:
+                                        st.caption("From Low-3 fit residual")
+                                        st.write("Not computed.")
+                                else:
+                                    st.caption("From Low-3 fit residual")
+                                    st.write("Slope or residual not available.")
                 else:
                     st.warning("No v₀ vs concentration data available.")
             
@@ -3411,7 +3518,7 @@ def data_load_mode(st):
                                     return float(c)
                                 except (ValueError, TypeError):
                                     return 0
-                            conc_order = sorted(raw_data.keys(), key=_conc_sort_key)
+                            conc_order = sorted([k for k in raw_data.keys() if k != '_blank'], key=_conc_sort_key)
                             for conc_name in conc_order:
                                 data = raw_data[conc_name]
                                 conc_val = None
@@ -3428,14 +3535,17 @@ def data_load_mode(st):
                                     except (ValueError, TypeError):
                                         conc_val = conc_name
                                 conc_display = f"{conc_val} {conc_unit}" if isinstance(conc_val, (int, float)) else str(conc_name)
-                                for t, v in zip(data['time'], data['value']):
-                                    exp_rows.append({'Concentration': conc_display, 'Time_min': t, 'RFU': v})
+                                sd_arr = data.get('SD')
+                                has_sd = sd_arr is not None and len(sd_arr) == len(data['time'])
+                                for i, (t, v) in enumerate(zip(data['time'], data['value'])):
+                                    sd_val = sd_arr[i] if has_sd else None
+                                    exp_rows.append({'Concentration': conc_display, 'Time_min': t, 'RFU': v, 'SD': sd_val})
                             if exp_rows:
                                 pd.DataFrame(exp_rows).to_excel(writer, sheet_name='Experimental data', index=False)
                             else:
-                                pd.DataFrame(columns=['Concentration', 'Time_min', 'RFU']).to_excel(writer, sheet_name='Experimental data', index=False)
+                                pd.DataFrame(columns=['Concentration', 'Time_min', 'RFU', 'SD']).to_excel(writer, sheet_name='Experimental data', index=False)
                         else:
-                            pd.DataFrame(columns=['Concentration', 'Time_min', 'RFU']).to_excel(writer, sheet_name='Experimental data', index=False)
+                            pd.DataFrame(columns=['Concentration', 'Time_min', 'RFU', 'SD']).to_excel(writer, sheet_name='Experimental data', index=False)
                         interp_df_copy = results['interp_df'].copy()
                         conc_col = 'Concentration [μM]' if 'Concentration [μM]' in interp_df_copy.columns else ('Concentration [ug/mL]' if 'Concentration [ug/mL]' in interp_df_copy.columns else ('Concentration' if 'Concentration' in interp_df_copy.columns else None))
                         if conc_col is not None and 'Time_min' in interp_df_copy.columns and 'RFU_Interpolated' in interp_df_copy.columns:
@@ -3491,6 +3601,17 @@ def data_load_mode(st):
                                     conc_display = f"{conc_value} μM"
                                 else:
                                     conc_display = f"{conc_value} μg/mL"
+                                k_obs = n_data.get('k_obs')
+                                F_max = n_data.get('Fmax', n_data.get('F_max'))
+                                if k_obs is not None and F_max is not None:
+                                    eq_no_tau = f"F(t) = {F_max:.4f}(1 - e^(-{k_obs:.4f}*t))"
+                                else:
+                                    eq_no_tau = ""
+                                F0_export = n_data.get('F0')
+                                if F0_export is not None and v0_conc is not None:
+                                    initial_linear_eq = f"F(t) = {F0_export:.4f} + {v0_conc:.4f}*t"
+                                else:
+                                    initial_linear_eq = ""
                                 norm_summary_data.append({
                                     'Concentration': conc_display,
                                     'F0': n_data['F0'],
@@ -3502,7 +3623,8 @@ def data_load_mode(st):
                                     'Exponent→Plateau (t=3τ_max)': t_exponential_plateau_max_export,
                                     'v0 (RFU/min)': v0_conc,
                                     'R²': n_data['R_squared'],
-                                    'Equation': n_data['equation']
+                                    'Equation': eq_no_tau,
+                                    'Initial linear region equation': initial_linear_eq
                                 })
                             if norm_summary_data:
                                 norm_summary_df = pd.DataFrame(norm_summary_data)
@@ -3592,15 +3714,26 @@ def data_load_mode(st):
                                     ]
                                 }
                             else:
-                                mm_fit_data = {
-                                    'Parameter': ['Slope', 'Intercept', 'R²', 'Equation'],
-                                    'Value': [
-                                        mm_fit.get('slope', None),
-                                        mm_fit.get('intercept', None),
-                                        mm_fit['R_squared'],
-                                        mm_fit.get('equation', 'N/A')
-                                    ]
-                                }
+                                params_list = ['Slope', 'Intercept', 'R²', 'Equation']
+                                values_list = [
+                                    mm_fit.get('slope', None),
+                                    mm_fit.get('intercept', None),
+                                    mm_fit['R_squared'],
+                                    mm_fit.get('equation', 'N/A')
+                                ]
+                                if mm_fit.get('blank_mean') is not None:
+                                    params_list.extend(['Blank mean', 'Blank SD', 'Blank n', 'LOD (signal, RFU/min)', 'LOQ (signal, RFU/min)'])
+                                    values_list.extend([
+                                        mm_fit['blank_mean'], mm_fit.get('blank_sd'), mm_fit.get('blank_n'),
+                                        mm_fit.get('LOD_signal'), mm_fit.get('LOQ_signal')
+                                    ])
+                                if mm_fit.get('LOD_conc') is not None:
+                                    params_list.extend(['LOD ([E], μg/mL)', 'LOQ ([E], μg/mL)'])
+                                    values_list.extend([mm_fit['LOD_conc'], mm_fit['LOQ_conc']])
+                                if mm_fit.get('LOD_conc_from_residual') is not None:
+                                    params_list.extend(['LOD ([E]) from residual (μg/mL)', 'LOQ ([E]) from residual (μg/mL)'])
+                                    values_list.extend([mm_fit['LOD_conc_from_residual'], mm_fit['LOQ_conc_from_residual']])
+                                mm_fit_data = {'Parameter': params_list, 'Value': values_list}
                             mm_fit_df = pd.DataFrame(mm_fit_data)
                             mm_fit_df.to_excel(writer, sheet_name='Fit results', index=False)
                         download_df.to_excel(writer, sheet_name='Model simulation input', index=False)
