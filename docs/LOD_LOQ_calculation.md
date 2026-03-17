@@ -50,9 +50,13 @@ $$
 \mathrm{LOD}_{\mathrm{signal}} = \mu_{\mathrm{blank}} + k_{\mathrm{LOD}} \cdot \sigma_{\mathrm{blank}}
 $$
 
+- **텍스트**: `LOD(signal) = blank_mean + k_LOD × blank_SD`
+
 $$
 \mathrm{LOQ}_{\mathrm{signal}} = \mu_{\mathrm{blank}} + k_{\mathrm{LOQ}} \cdot \sigma_{\mathrm{blank}}
 $$
+
+- **텍스트**: `LOQ(signal) = blank_mean + k_LOQ × blank_SD`
 
 - **기본값**: \(k_{\mathrm{LOD}} = 3\), \(k_{\mathrm{LOQ}} = 10\).
 - **Blank SD = 0** (한 점만 있거나 복제 1개)인 경우:  
@@ -72,6 +76,8 @@ $$
 v_0 = \mathrm{slope} \times [E] + \mathrm{intercept}
 $$
 
+- **텍스트**: `v₀ = slope × [E] + intercept`
+
 이 관계를 이용해 **신호 LOD/LOQ**를 **농도 LOD/LOQ**로 변환합니다.
 
 ### 4.1 Blank 기반 (선형 보정 곡선 사용)
@@ -83,6 +89,8 @@ $$
 ,\qquad
 [E]_{\mathrm{LOQ}} = \frac{\mathrm{LOQ}_{\mathrm{signal}} - \mathrm{intercept}}{\mathrm{slope}}
 $$
+
+- **텍스트**: `LOD([E]) = (LOD_signal - intercept) / slope`, `LOQ([E]) = (LOQ_signal - intercept) / slope`
 
 - **slope ≤ 0** 이면 농도 LOD/LOQ는 계산하지 않습니다.
 - 음수 농도는 0으로 클리핑합니다.
@@ -100,6 +108,20 @@ $$
 Blank의 SD를 쓰지 않고, **v₀ vs [E] 선형 회귀의 잔차 표준편차**로 농도 LOD/LOQ를 추정할 수 있습니다.  
 Blank가 한 점만 있거나 SD가 없을 때 유용합니다.
 
+**잔차 표준편차란?**  
+- **잔차(residual)** = 각 농도에서 **실제 측정한 v₀**와 **보정 직선이 예측한 v₀**의 차이.  
+  즉, “직선에서 얼마나 벗어났는지”를 숫자로 둔 값입니다.  
+- **잔차 표준편차(s_y)** = 이 잔차들이 평균 0 주변에서 얼마나 퍼져 있는지의 크기.  
+  직선 피팅이 얼마나 “데이터를 잘 따라가는지”의 반대 개념이라, **작을수록** 피팅이 좋고, **클수록** 측정이 직선에서 많이 흩어져 있다는 뜻입니다.
+
+**계산 순서 (요약)**  
+1. v₀ = slope×[E] + intercept 로 **직선 피팅** → slope, intercept 얻음.  
+2. 각 농도 [E]_i 에서 **예측값** v̂₀,i = slope×[E]_i + intercept 계산.  
+3. **잔차** = (실제 v₀,i − v̂₀,i).  
+4. **잔차 제곱합** SS_res = Σ (실제 − 예측)².  
+5. **잔차 표준편차** s_y = √(SS_res / (n−2)).  
+   (n = 데이터 점 개수, n−2 = 선형 회귀의 자유도.)
+
 **왜 Blank mean/SD를 쓰지 않나?**  
 두 방식은 **정의가 다릅니다.**  
 - **Blank 기반 (4.1)**: “blank 신호의 변동(σ_blank)”을 기준으로, blank와 구별 가능한 최소 신호 → 농도로 환산.  
@@ -108,15 +130,22 @@ Blank가 한 점만 있거나 SD가 없을 때 유용합니다.
 즉, 잔차 방식은 “각 농도에서 v₀가 피팅 직선에서 얼마나 흩어져 있는지”만 사용하므로, **Blank mean/SD는 이 공식에 들어가지 않습니다.**  
 (Blank 데이터가 있어도 “From blank (PBS)” 결과에만 쓰이고, “From calibration residual” 계산에는 사용하지 않습니다.)
 
-- 잔차 제곱합: \(\mathrm{SS}_{\mathrm{res}} = \sum_i (v_{0,i} - \hat{v}_{0,i})^2\)
-- 자유도: \(n - 2\) (선형 회귀)
-- 잔차 표준편차: \(s_y = \sqrt{\mathrm{SS}_{\mathrm{res}} / (n-2)}\)
+**공식 정리**
+
+- 잔차 제곱합: \(\mathrm{SS}_{\mathrm{res}} = \sum_i (v_{0,i} - \hat{v}_{0,i})^2\)  
+  **텍스트**: `SS_res = Σ (v₀_측정 - v₀_예측)²`
+- 자유도: \(n - 2\) (선형 회귀: 기울기 + 절편 2개 추정)
+- 잔차 표준편차: \(s_y = \sqrt{\mathrm{SS}_{\mathrm{res}} / (n-2)}\)  
+  **텍스트**: `s_y = √(SS_res / (n-2))`
 
 $$
 [E]_{\mathrm{LOD}} = k_{\mathrm{LOD}} \cdot \frac{s_y}{\mathrm{slope}}
 ,\qquad
 [E]_{\mathrm{LOQ}} = k_{\mathrm{LOQ}} \cdot \frac{s_y}{\mathrm{slope}}
 $$
+
+- **텍스트**: `LOD([E]) = k_LOD × (s_y / slope)`, `LOQ([E]) = k_LOQ × (s_y / slope)`  
+  (s_y = 잔차 표준편차, slope = 보정 직선 기울기)
 
 - **기본값**: \(k_{\mathrm{LOD}} = 3\), \(k_{\mathrm{LOQ}} = 10\).
 - slope > 0 이고 \(s_y\) 가 계산 가능할 때만 사용합니다.

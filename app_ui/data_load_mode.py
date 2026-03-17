@@ -3303,24 +3303,42 @@ def data_load_mode(st):
                     fig_v0 = _apply_display_layout_like_export(fig_v0)
                     st.plotly_chart(fig_v0, use_container_width=True)
 
-                    # LOD/LOQ for Full linear fit (이 플롯에 대응)
-                    if exp_type != "Substrate Concentration Variation (Standard Michaelis-Menten)" and (
-                        mm_fit.get('LOD_conc') is not None or mm_fit.get('LOD_conc_from_residual') is not None
-                    ):
-                        st.markdown("**LOD / LOQ (Full linear fit)**")
-                        full_lod_c1, full_lod_c2 = st.columns(2)
-                        with full_lod_c1:
-                            if mm_fit.get('blank_mean') is not None:
-                                st.caption("From blank (PBS)")
-                                st.write(f"Blank: mean = {mm_fit['blank_mean']:.2f}, SD = {mm_fit.get('blank_sd', 0):.2f} (n={mm_fit.get('blank_n', 0)})")
-                                if mm_fit.get('LOD_signal') is not None:
-                                    st.write(f"LOD (signal) = {mm_fit['LOD_signal']:.2f}, LOQ (signal) = {mm_fit['LOQ_signal']:.2f} (RFU/min)")
-                                if mm_fit.get('LOD_conc') is not None:
-                                    st.write(f"**LOD ([E]) = {mm_fit['LOD_conc']:.4f}**, **LOQ ([E]) = {mm_fit['LOQ_conc']:.4f}** (μg/mL)")
-                        with full_lod_c2:
-                            if mm_fit.get('LOD_conc_from_residual') is not None:
-                                st.caption("From calibration residual (3σ / slope)")
-                                st.write(f"**LOD ([E]) = {mm_fit['LOD_conc_from_residual']:.4f}**, **LOQ ([E]) = {mm_fit['LOQ_conc_from_residual']:.4f}** (μg/mL)")
+                    # LOD/LOQ for Full linear fit (이 플롯에 대응) — Enzyme 모드일 때 항상 표시, 없으면 slope/intercept/residual/blank로 계산
+                    if exp_type != "Substrate Concentration Variation (Standard Michaelis-Menten)":
+                        slope_full = mm_fit.get('slope')
+                        intercept_full = mm_fit.get('intercept', 0)
+                        resid_full = mm_fit.get('residual_std')
+                        lod_conc_full = mm_fit.get('LOD_conc')
+                        loq_conc_full = mm_fit.get('LOQ_conc')
+                        lod_r_full = mm_fit.get('LOD_conc_from_residual')
+                        loq_r_full = mm_fit.get('LOQ_conc_from_residual')
+                        if lod_conc_full is None and slope_full is not None and slope_full > 0 and mm_fit.get('LOD_signal') is not None and mm_fit.get('LOQ_signal') is not None:
+                            lod_conc_full, loq_conc_full = compute_lod_loq_concentration_from_linear(mm_fit['LOD_signal'], mm_fit['LOQ_signal'], slope_full, intercept_full)
+                        if lod_r_full is None and resid_full is not None and slope_full is not None and slope_full > 0:
+                            lod_r_full, loq_r_full = compute_lod_loq_from_residual(resid_full, slope_full)
+                        if (lod_conc_full is not None or lod_r_full is not None or mm_fit.get('blank_mean') is not None or (slope_full is not None and slope_full > 0)):
+                            st.markdown("**LOD / LOQ (Full linear fit)**")
+                            full_lod_c1, full_lod_c2 = st.columns(2)
+                            with full_lod_c1:
+                                if mm_fit.get('blank_mean') is not None:
+                                    st.caption("From blank (PBS)")
+                                    st.write(f"Blank: mean = {mm_fit['blank_mean']:.2f}, SD = {mm_fit.get('blank_sd', 0):.2f} (n={mm_fit.get('blank_n', 0)})")
+                                    if mm_fit.get('LOD_signal') is not None:
+                                        st.write(f"LOD (signal) = {mm_fit['LOD_signal']:.2f}, LOQ (signal) = {mm_fit['LOQ_signal']:.2f} (RFU/min)")
+                                    if lod_conc_full is not None:
+                                        st.write(f"**LOD ([E]) = {lod_conc_full:.4f}**, **LOQ ([E]) = {loq_conc_full:.4f}** (μg/mL)")
+                                    elif slope_full is None or slope_full <= 0:
+                                        st.write("(LOD/LOQ [E]: full fit slope ≤ 0)")
+                                else:
+                                    st.caption("From blank (PBS)")
+                                    st.write("Blank not provided.")
+                            with full_lod_c2:
+                                if lod_r_full is not None:
+                                    st.caption("From calibration residual (3σ / slope)")
+                                    st.write(f"**LOD ([E]) = {lod_r_full:.4f}**, **LOQ ([E]) = {loq_r_full:.4f}** (μg/mL)")
+                                else:
+                                    st.caption("From calibration residual (3σ / slope)")
+                                    st.write("Not available (need slope > 0 and residual).")
 
                     # 전체 선형 피팅 R²가 낮은 경우(기준 0.8): 최저 농도 3개만 사용한 보조 선형 피팅 추가 표시
                     if exp_type != "Substrate Concentration Variation (Standard Michaelis-Menten)":
@@ -3423,32 +3441,35 @@ def data_load_mode(st):
                             st.info("Overall linear fit R² is below 0.8. Showing supplementary low-3 linear fit and (if 5 points exist) a constant fit for 3rd-5th [E].")
                             st.plotly_chart(fig_v0_low3, use_container_width=True)
 
-                            # LOD/LOQ for Low-3 linear fit (이 플롯에 대응)
+                            # LOD/LOQ for Low-3 linear fit — k_LOD/k_LOQ 및 변환 모두 Low-3 fit 전용
                             st.markdown("**LOD / LOQ (Low-3 linear fit)**")
-                            lod_sig = mm_fit.get('LOD_signal')
-                            loq_sig = mm_fit.get('LOQ_signal')
+                            blank_mean = mm_fit.get('blank_mean')
+                            blank_sd = mm_fit.get('blank_sd') or 0
+                            lod_sig_l3, loq_sig_l3 = (compute_lod_loq_signal(blank_mean, blank_sd, k_lod=3, k_loq=10) if (blank_mean is not None and blank_sd is not None) else (None, None))
                             low3_lod_c1, low3_lod_c2 = st.columns(2)
                             with low3_lod_c1:
-                                if lod_sig is not None and loq_sig is not None and low3_slope is not None and low3_slope > 0:
-                                    lod_conc_l3, loq_conc_l3 = compute_lod_loq_concentration_from_linear(lod_sig, loq_sig, low3_slope, low3_intercept)
-                                    if lod_conc_l3 is not None:
-                                        st.caption("From blank (PBS) + Low-3 slope/intercept")
-                                        if mm_fit.get('blank_mean') is not None:
-                                            st.write(f"Blank: mean = {mm_fit['blank_mean']:.2f}, SD = {mm_fit.get('blank_sd', 0):.2f}")
+                                st.caption("From blank (PBS) + Low-3 slope/intercept (k_LOD=3, k_LOQ=10)")
+                                if blank_mean is not None:
+                                    st.write(f"Blank: mean = {mm_fit['blank_mean']:.2f}, SD = {mm_fit.get('blank_sd', 0):.2f} (n={mm_fit.get('blank_n', 0)})")
+                                if lod_sig_l3 is not None and loq_sig_l3 is not None:
+                                    st.write(f"LOD (signal) = {lod_sig_l3:.2f}, LOQ (signal) = {loq_sig_l3:.2f} (RFU/min)")
+                                if lod_sig_l3 is not None and loq_sig_l3 is not None and low3_slope is not None and low3_slope > 0:
+                                    lod_conc_l3, loq_conc_l3 = compute_lod_loq_concentration_from_linear(lod_sig_l3, loq_sig_l3, low3_slope, low3_intercept)
+                                    if lod_conc_l3 is not None and loq_conc_l3 is not None:
                                         st.write(f"**LOD ([E]) = {lod_conc_l3:.4f}**, **LOQ ([E]) = {loq_conc_l3:.4f}** (μg/mL)")
                                     else:
-                                        st.caption("From blank (PBS) + Low-3 slope/intercept")
-                                        st.write("(Not computed: slope ≤ 0)")
+                                        st.write("(LOD/LOQ [E]: computed as 0 or not computed)")
+                                elif lod_sig_l3 is None or loq_sig_l3 is None:
+                                    st.write("LOD/LOQ (signal) not available (blank not provided).")
                                 else:
-                                    st.caption("From blank (PBS)")
-                                    st.write("Blank or Low-3 slope not available.")
+                                    st.write("LOD/LOQ ([E]) not available (Low-3 slope ≤ 0).")
                             with low3_lod_c2:
-                                # residual std for Low-3: n=3, df=n-2=1
+                                # Low-3 fit residual만 사용, k_LOD=3 / k_LOQ=10 명시
                                 if low3_slope is not None and low3_slope > 0 and ss_res_low3 is not None:
                                     residual_std_low3 = float(np.sqrt(ss_res_low3 / 1.0)) if ss_res_low3 >= 0 else 0.0
-                                    lod_r_l3, loq_r_l3 = compute_lod_loq_from_residual(residual_std_low3, low3_slope)
+                                    lod_r_l3, loq_r_l3 = compute_lod_loq_from_residual(residual_std_low3, low3_slope, k_lod=3, k_loq=10)
                                     if lod_r_l3 is not None:
-                                        st.caption("From Low-3 fit residual (3σ / slope)")
+                                        st.caption("From Low-3 fit residual (k_LOD·σ/slope, k_LOQ·σ/slope)")
                                         st.write(f"**LOD ([E]) = {lod_r_l3:.4f}**, **LOQ ([E]) = {loq_r_l3:.4f}** (μg/mL)")
                                     else:
                                         st.caption("From Low-3 fit residual")
@@ -3629,14 +3650,18 @@ def data_load_mode(st):
                             if norm_summary_data:
                                 norm_summary_df = pd.DataFrame(norm_summary_data)
                                 norm_summary_df.to_excel(writer, sheet_name='Normalization results', index=False)
-                        # Enzyme mode supplementary fit details sheet (below-0.8 case visualization details)
+                        # Enzyme mode: Supplementary fit sheet only when Full linear fit R² < 0.8 (Low-3 used)
                         if _exp_type != "Substrate Concentration Variation (Standard Michaelis-Menten)":
                             v0_data_export = results.get('v0_vs_concentration', {})
                             mm_fit_export = results.get('mm_fit_results', {})
                             conc_vals_export = np.array(v0_data_export.get('concentrations', []), dtype=float)
                             v0_vals_export = np.array(v0_data_export.get('v0_values', []), dtype=float)
+                            full_r2_export = mm_fit_export.get('R_squared')
+                            # Create Supplementary fit v0-E sheet only when Low-3 linear fit is actually used (R² < 0.8)
                             if (
-                                len(conc_vals_export) >= 3
+                                full_r2_export is not None
+                                and full_r2_export < 0.8
+                                and len(conc_vals_export) >= 3
                                 and len(v0_vals_export) >= 3
                                 and len(conc_vals_export) == len(v0_vals_export)
                             ):
@@ -3663,10 +3688,11 @@ def data_load_mode(st):
                                     mean_abs_const_export = float(np.abs(np.mean(v0_const_export)))
                                     const_cvrmse_export = (const_rmse_export / mean_abs_const_export * 100.0) if mean_abs_const_export > 0 else np.nan
 
-                                full_r2_export = mm_fit_export.get('R_squared')
+                                # Full linear fit and Low-3 linear fit equations provided separately
                                 summary_rows_export = [
                                     {'Item': 'Condition (for supplementary plot)', 'Value': 'Full linear fit R² < 0.8'},
                                     {'Item': 'Full linear fit R²', 'Value': full_r2_export},
+                                    {'Item': 'Full linear fit equation', 'Value': mm_fit_export.get('equation', 'N/A')},
                                     {'Item': 'Low-3 linear equation', 'Value': f"v₀ = {slope_low3_export:.6f} * [E] + {intercept_low3_export:.6f}"},
                                     {'Item': 'Low-3 linear fit R²', 'Value': r2_low3_export},
                                     {'Item': 'Const fit range', 'Value': '3rd-5th concentration points (sorted by [E])'},
@@ -3733,6 +3759,50 @@ def data_load_mode(st):
                                 if mm_fit.get('LOD_conc_from_residual') is not None:
                                     params_list.extend(['LOD ([E]) from residual (μg/mL)', 'LOQ ([E]) from residual (μg/mL)'])
                                     values_list.extend([mm_fit['LOD_conc_from_residual'], mm_fit['LOQ_conc_from_residual']])
+                                # When R² < 0.8, add Low-3 linear fit LOD/LOQ so they appear in Excel
+                                r2_full = mm_fit.get('R_squared')
+                                v0_data_fit = results.get('v0_vs_concentration', {})
+                                conc_vals_fit = np.array(v0_data_fit.get('concentrations', []), dtype=float)
+                                v0_vals_fit = np.array(v0_data_fit.get('v0_values', []), dtype=float)
+                                if (
+                                    r2_full is not None
+                                    and r2_full < 0.8
+                                    and len(conc_vals_fit) >= 3
+                                    and len(v0_vals_fit) >= 3
+                                    and len(conc_vals_fit) == len(v0_vals_fit)
+                                ):
+                                    sort_idx_fit = np.argsort(conc_vals_fit)
+                                    conc_sorted_fit = conc_vals_fit[sort_idx_fit]
+                                    v0_sorted_fit = v0_vals_fit[sort_idx_fit]
+                                    conc_low3_fit = conc_sorted_fit[:3]
+                                    v0_low3_fit = v0_sorted_fit[:3]
+                                    low3_slope_fit, low3_intercept_fit = np.polyfit(conc_low3_fit, v0_low3_fit, 1)
+                                    v0_pred_low3_fit = np.polyval([low3_slope_fit, low3_intercept_fit], conc_low3_fit)
+                                    ss_res_low3_fit = np.sum((v0_low3_fit - v0_pred_low3_fit) ** 2)
+                                    residual_std_low3_fit = float(np.sqrt(ss_res_low3_fit / 1.0)) if ss_res_low3_fit >= 0 else 0.0
+                                    # LOD/LOQ from blank + Low-3 slope/intercept
+                                    blank_mean_fit = mm_fit.get('blank_mean')
+                                    blank_sd_fit = mm_fit.get('blank_sd') or 0
+                                    lod_sig_l3_fit, loq_sig_l3_fit = (
+                                        compute_lod_loq_signal(blank_mean_fit, blank_sd_fit, k_lod=3, k_loq=10)
+                                        if (blank_mean_fit is not None and blank_sd_fit is not None)
+                                        else (None, None)
+                                    )
+                                    if lod_sig_l3_fit is not None and loq_sig_l3_fit is not None and low3_slope_fit > 0:
+                                        lod_conc_l3_fit, loq_conc_l3_fit = compute_lod_loq_concentration_from_linear(
+                                            lod_sig_l3_fit, loq_sig_l3_fit, low3_slope_fit, low3_intercept_fit
+                                        )
+                                        if lod_conc_l3_fit is not None and loq_conc_l3_fit is not None:
+                                            params_list.extend(['LOD ([E], Low-3, μg/mL)', 'LOQ ([E], Low-3, μg/mL)'])
+                                            values_list.extend([lod_conc_l3_fit, loq_conc_l3_fit])
+                                    # LOD/LOQ from Low-3 fit residual
+                                    if low3_slope_fit > 0:
+                                        lod_r_l3_fit, loq_r_l3_fit = compute_lod_loq_from_residual(
+                                            residual_std_low3_fit, low3_slope_fit, k_lod=3, k_loq=10
+                                        )
+                                        if lod_r_l3_fit is not None and loq_r_l3_fit is not None:
+                                            params_list.extend(['LOD ([E]) from residual (Low-3, μg/mL)', 'LOQ ([E]) from residual (Low-3, μg/mL)'])
+                                            values_list.extend([lod_r_l3_fit, loq_r_l3_fit])
                                 mm_fit_data = {'Parameter': params_list, 'Value': values_list}
                             mm_fit_df = pd.DataFrame(mm_fit_data)
                             mm_fit_df.to_excel(writer, sheet_name='Fit results', index=False)
